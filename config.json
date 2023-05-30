@@ -1,0 +1,16 @@
+{
+    "picture_trim_info_1536": {
+        "start_row": 670,
+        "end_row": 2420,
+        "start_col": 730,
+        "end_col": 3400
+    },
+    "colony_spacing_and_locations_1536": {
+        "start_x": 40,
+        "start_y": 15,
+        "step_x": 53.85,
+        "step_y": 53.75
+    },
+    "text_division_of_origin_96_well_plate": ["1-4", "5-8", "9-12"],
+    "numaric_division_of_origin_96_well_plate": [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]] 
+}
