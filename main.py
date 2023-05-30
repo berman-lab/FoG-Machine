@@ -1,7 +1,6 @@
 import os
 import cv2
 import json
-import h5py
 import pathlib
 import argparse
 import itertools
@@ -136,7 +135,7 @@ def main():
         # Each plate will have all its data loaded at once. Making for four images per plate,
         # 24 hours with no drug, 48 hours with no drug, 
         # 24 hours with drug and 48 hours with drug
-        
+
         # Get the growth areas for each well in the original 96 well plate
         for origin_well_row_index, origin_well_column_index in origin_wells:
             exp_growth_areas = convert_original_index_to_experiment_wells_indexes(origin_well_row_index, origin_well_column_index,plate_format)
