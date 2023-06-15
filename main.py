@@ -121,7 +121,6 @@ def main():
             # Save the result image
             cv2.imwrite(f'{QC_dir}/{image_name}.png', image)
 
-
     # Make a list of the wells in the original 96 well plate
     origin_wells = itertools.product(range(8), range(12))
     
@@ -130,18 +129,19 @@ def main():
     
     for diviosion in text_division_of_origin_96_well_plate:
         # Get the images for the current experiment based on their original wells
-        # example: all the images that came from rows 1-4 should give back 4 image files
         exp_images = group_expriment_images(diviosion, list(organized_images.keys()))
-        # Each plate will have all its data loaded at once. Making for four images per plate,
-        # 24 hours with no drug, 48 hours with no drug, 
-        # 24 hours with drug and 48 hours with drug
 
         # Get the growth areas for each well in the original 96 well plate
         for origin_well_row_index, origin_well_column_index in origin_wells:
-            exp_growth_areas = convert_original_index_to_experiment_wells_indexes(origin_well_row_index, origin_well_column_index,plate_format)
-            # Get the areas for the current well
-            #current_growth_areas = growth_areas[exp_growth_areas[0]:exp_growth_areas[1]]
-            # Calculate the mean growth at the 24ND and 48ND - TODO
+            exp_growth_areas = list(convert_original_index_to_experiment_wells_indexes(origin_well_row_index, origin_well_column_index, plate_format))
+            
+            # Get the growth areas for the current well in all plates
+            row_slice = slice(exp_growth_areas[0][0],exp_growth_areas[-1][0] + 1)
+            column_slice = slice(exp_growth_areas[0][1],exp_growth_areas[-1][-1] + 1)
+
+            well_growth_areas = growth_areas[row_slice, column_slice]
+            # Caclute the average intensity for the 24 image
+            
 
 def get_files_from_directory(path , extension):
     '''Get the full path to each file with the extension specified from the path'''
@@ -224,13 +224,13 @@ def get_growth_areas(plate_format):
     
     Returns
     -------
-    a two dimentional numpy array with dictionaries with the following structure:
+    A two dimentional numpy array indexed as (Row, Column) with each element containing a dictionary with the following structure:
         "start_x" : start_x_value,
         "end_x" : end_x_value,
         "stary_y" : start_x_value,
         "end_y" : end_y_value
     
-    The areas are ordered from left to right and top to bottom
+    The areas are ordered from top to bottom then left to right
     and therefore correspond to the order of growth areas in the plate
     '''
     areas = np.empty((32, 48), dtype=object)
