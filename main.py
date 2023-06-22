@@ -15,7 +15,7 @@ def main():
     parser.add_argument('-d', '--drug', help='The drug name', required=True)
     parser.add_argument('-f', '--format', help='The layout of colonies of the plate (384, 1536)', required=True)
     parser.add_argument('-ct', '--colony_threshold', help='The threshold for the colony detection as the intesity of the grayscale pixel. (0,255)', required=True)
-    parser.add_argument('-o', '--order_only', help='Only order the pictures', action='store_true')
+    parser.add_argument('-o', '--is_order_only', help='Only order the pictures', action='store_true')
     parser.add_argument('-qc', help='generate QC pictures', action='store_true')
     
     args = parser.parse_args()
@@ -24,7 +24,7 @@ def main():
     drug_name = args.drug
     plate_format = int(args.format)
     colony_threshold = int(args.colony_threshold)
-    order_only = args.order_only
+    is_order_only = args.is_order_only
     is_generate_qc = args.qc
     input_images = get_files_from_directory(path , '.png')
     organized_images = {}
@@ -52,18 +52,119 @@ def main():
 
     text_division_of_origin_96_well_plate = config["text_division_of_origin_96_well_plate"]
     numaric_division_of_origin_96_well_plate = config["numaric_division_of_origin_96_well_plate"]
-
+    
     output_dir_images = create_directory(path, f'ISO_PL_{plate_num}_preproccesed_images')
-    #output_dir_segmentation = create_directory(path, f'ISO_PL_{plate_num}_segmented_images')
     QC_dir = create_directory(path, f'QC_ISO_PL_{plate_num}')
     
-    # Crop the imges and rename them one at a time
+    organized_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, plate_num, drug_name, colony_threshold, output_dir_images)
+
+    # If the user has chosen to only trim and transform the pictures, return
+    if is_order_only:
+        return
+
+    if(is_generate_qc):
+        generate_qc_images(organized_images, QC_dir)
+
+    # Make a list of the wells in the original 96 well plate
+    origin_wells = itertools.product(range(8), range(12))
+    
+    # Get the areas in the experiment plate
+    growth_areas = get_growth_areas(plate_format)
+    
+    # Store the future area lists each under the wells in the original 96 well plate
+    template_dict = {text_division_of_origin_96_well_plate[0]: "", text_division_of_origin_96_well_plate[1]: "", text_division_of_origin_96_well_plate[2]: ""}
+    exp_24_areas, ND_24_areas, exp_48_areas, ND_48_areas = init_area_containers(plate_format, template_dict)
+
+    for diviosion in text_division_of_origin_96_well_plate:
+        # Get the images for the current experiment based on their original wells
+        exp_images = group_expriment_images(diviosion, list(organized_images.keys()))
+
+        # Get the growth areas for each well in the original 96 well plate
+        for origin_well_row_index, origin_well_column_index in origin_wells:
+            exp_growth_areas = list(convert_original_index_to_experiment_wells_indexes(origin_well_row_index, origin_well_column_index, plate_format))
+            
+            # Get the growth areas for the current well in all plates
+            row_slice = slice(exp_growth_areas[0][0],exp_growth_areas[-1][0] + 1)
+            column_slice = slice(exp_growth_areas[0][1],exp_growth_areas[-1][-1] + 1)
+
+            well_growth_areas = growth_areas[row_slice, column_slice]
+            
+            for row_index, row in enumerate(well_growth_areas):
+                for column_index, item in enumerate(row):
+                    areas = calculate_growth_area(exp_images, item["start_y"], item["end_y"], item["start_x"], item["end_x"])
+                                
+
+def get_files_from_directory(path , extension):
+    '''Get the full path to each file with the extension specified from the path'''
+    files = []
+    for file in os.listdir(path):
+        if file.endswith(extension):
+            files.append(os.path.join(path ,file))
+    return files
+
+
+def create_directory(father_directory, nested_directory_name):
+    '''
+    Description
+    -----------
+    Create a directory if it does not exist
+    
+    Parameters
+    ----------
+    father_directory : str
+        The path to the directory under which the new directory will be created
+    nested_directory_name : str
+        The name of the nested directory to be created
+    '''
+    # Create the output directory path
+    new_dir_path = os.path.join(father_directory, nested_directory_name)
+    # Create the directory if it does not exist
+    if not os.path.isdir(new_dir_path):
+        os.mkdir(new_dir_path)
+    return new_dir_path
+
+
+def preprocess_images(input_images, start_row, end_row, start_col, end_col, plate_num, drug_name ,colony_threshold, output_path):
+    '''
+    Description
+    -----------
+    Preprocess the images by cropping them, and converting to black and white them saving them in the outpit path directory
+
+    Parameters
+    ----------
+    input_images : list
+        A list of the paths to the images to be preprocessed
+    start_row : int
+        The row index of the top left corner of the area to be cropped
+    end_row : int
+        The row index of the bottom right corner of the area to be cropped
+    start_col : int
+        The column index of the top left corner of the area to be cropped
+    end_col : int
+        The column index of the bottom right corner of the area to be cropped
+    plate_num : int
+        The number of the plate from which the images were taken
+    drug_name : str
+        The name of the drug used in the experiment
+    colony_threshold : int
+        The threshold used for determining if a pixel is part of a colony or not
+    output_path : str
+        The path to the directory in which the preprocessed images will be saved
+
+    Returns
+    -------
+    dict
+        A dictionary containing the images after preprocessing under the name of the image without the extension
+    '''
+
+    organized_images = {}
+
     for picture in input_images:
         picture_name = pathlib.Path(picture).stem.lower()
 
         image = cv2.imread(picture)
         # Crop the image
-        #start_row:end_row, start_col:end_col
+        # start_row:end_row, start_col:end_col
         cropped_image = image[start_row:end_row, start_col:end_col]
         
         if '1-4' in picture_name:
@@ -97,80 +198,82 @@ def main():
         cropped_image[mask] = 255
         cropped_image[~mask] = 0
         organized_images[current_image_name] = cropped_image
-        cv2.imwrite(os.path.join(output_dir_images, current_image_name + ".png"), cropped_image)    
+        cv2.imwrite(os.path.join(output_path, current_image_name + ".png"), cropped_image)
 
-    # If the user has chosen to only order the pictures, return
-    if(order_only):
-        return
+    return organized_images
 
-    # If the user has chosen to generate the qc images, generate them
-    if(is_generate_qc):
-        # Overlay a grid on the images for visualizing the areas in which the calculations are done
-        for image_name ,image in organized_images.items():
-            height, width = image.shape
-            grid_color = 255
-
-            # Draw vertical grid lines
-            for i in range(0, 49):
-                cv2.line(image, (start_x + round(i * step_x), 0), (start_x + round(i * step_x), height), grid_color, 1)
-
-            # Draw horizontal grid lines
-            for i in range(0, 33):
-                cv2.line(image, (0, start_y + round(i * step_y)), (width, start_y + round(i * step_y)), grid_color, 1)
-
-            # Save the result image
-            cv2.imwrite(f'{QC_dir}/{image_name}.png', image)
-
-    # Make a list of the wells in the original 96 well plate
-    origin_wells = itertools.product(range(8), range(12))
-    
-    # Get the areas in the experiment plate
-    growth_areas = get_growth_areas(plate_format)
-    
-    for diviosion in text_division_of_origin_96_well_plate:
-        # Get the images for the current experiment based on their original wells
-        exp_images = group_expriment_images(diviosion, list(organized_images.keys()))
-
-        # Get the growth areas for each well in the original 96 well plate
-        for origin_well_row_index, origin_well_column_index in origin_wells:
-            exp_growth_areas = list(convert_original_index_to_experiment_wells_indexes(origin_well_row_index, origin_well_column_index, plate_format))
-            
-            # Get the growth areas for the current well in all plates
-            row_slice = slice(exp_growth_areas[0][0],exp_growth_areas[-1][0] + 1)
-            column_slice = slice(exp_growth_areas[0][1],exp_growth_areas[-1][-1] + 1)
-
-            well_growth_areas = growth_areas[row_slice, column_slice]
-            # Caclute the average intensity for the 24 image
-            
-
-def get_files_from_directory(path , extension):
-    '''Get the full path to each file with the extension specified from the path'''
-    files = []
-    for file in os.listdir(path):
-        if file.endswith(extension):
-            files.append(os.path.join(path ,file))
-    return files
-
-
-def create_directory(father_directory, nested_directory_name):
+def generate_qc_images(organized_images, output_path):
     '''
     Description
     -----------
-    Create a directory if it does not exist
     
     Parameters
     ----------
-    father_directory : str
-        The path to the directory under which the new directory will be created
-    nested_directory_name : str
-        The name of the nested directory to be created
+    organized_images : dict
+        A dictionary containing the images after preprocessing under the name of the image without the extension
+    output_path : str
+        The path to the directory in which the preprocessed images will be saved
+    
+    Returns
+    -------
+    Boolean
+        True if the images were saved successfully, False otherwise
     '''
-    # Create the output directory path
-    new_dir_path = os.path.join(father_directory, nested_directory_name)
-    # Create the directory if it does not exist
-    if not os.path.isdir(new_dir_path):
-        os.mkdir(new_dir_path)
-    return new_dir_path
+
+    # Overlay a grid on the images for visualizing the areas in which the calculations are done
+    for image_name ,image in organized_images.items():
+        height, width = image.shape
+        grid_color = 255
+
+        # Draw vertical grid lines
+        for i in range(0, 49):
+            cv2.line(image, (start_x + round(i * step_x), 0), (start_x + round(i * step_x), height), grid_color, 1)
+
+        # Draw horizontal grid lines
+        for i in range(0, 33):
+            cv2.line(image, (0, start_y + round(i * step_y)), (width, start_y + round(i * step_y)), grid_color, 1)
+
+        # Save the result image
+        cv2.imwrite(f'{output_path}/{image_name}.png', image)
+    
+    return True 
+
+def init_area_containers(plate_format, template_dict):
+    '''
+    Description
+    -----------
+    Initialize the containers for the growth areas with the appropriate dimensions for the plate format
+    under the keys as provided in the template dictionary
+    
+    Parameters
+    ----------
+    plate_format : int
+        The format of the plate. Only 1536 is supported at the moment
+    template_dict : dict
+        A dictionary with the keys as the names of the areas and the values as empty strings
+    
+    Returns
+    -------
+    dicts: exp_24_areas, ND_24_areas, exp_48_areas, ND_48_areas
+    with the keys as the names provided in the template dictionary and the values as numpy arrays with the appropriate dimensions
+
+    '''
+
+    exp_24_areas = template_dict.copy()
+    ND_24_areas = template_dict.copy()
+    exp_48_areas = template_dict.copy()
+    ND_48_areas = template_dict.copy()
+
+    if plate_format == 1536:
+        for key in template_dict.keys():
+            exp_24_areas[key] = np.zeros((32, 48), dtype=np.float32)
+            ND_24_areas[key] = np.zeros((32, 48), dtype=np.float32)
+            exp_48_areas[key] = np.zeros((32, 48), dtype=np.float32)
+            ND_48_areas[key] = np.zeros((32, 48), dtype=np.float32)
+    else:
+        raise ValueError('The plate format is not supported')
+    
+    return exp_24_areas, ND_24_areas, exp_48_areas, ND_48_areas
 
 
 def group_expriment_images(row_txt, paths_to_images):
@@ -209,6 +312,35 @@ def group_expriment_images(row_txt, paths_to_images):
                 exp_images["48hr"] = image_path
     
     return exp_images
+
+
+def calculate_growth_area(organized_images ,start_y, end_y, start_x, end_x):
+    '''
+    Description
+    -----------
+    Calculate the growth within an area in the images provided in the dictionary
+    
+    Parameters
+    ----------
+    organized_images : dict
+        Contains the the images as a dataframe under the keys as provided in the group_expriment_images function
+    start_x : int
+        The start x coordinate of the area
+    end_x : int
+        The end x coordinate of the area
+    start_y : int
+        The start y coordinate of the area
+    end_y : int
+        The end y coordinate of the area
+    
+    Returns
+    ----------
+    dictionary with the keys as given in the images_dict and the values as the growth area within the area provided
+    '''
+    growth_areas = {}
+    for key, image in organized_images.items():
+        growth_areas[key] = image.iloc[start_y:end_y, start_x:end_x].count()
+    return growth_areas
 
 
 def get_growth_areas(plate_format):
