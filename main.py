@@ -5,7 +5,6 @@ import pathlib
 import argparse
 import itertools
 import numpy as np
-from skimage import feature
 
 def main():
     # Set up the argument parser
@@ -75,6 +74,9 @@ def main():
     template_dict = {text_division_of_origin_96_well_plate[0]: "", text_division_of_origin_96_well_plate[1]: "", text_division_of_origin_96_well_plate[2]: ""}
     exp_24_areas, ND_24_areas, exp_48_areas, ND_48_areas = init_area_containers(plate_format, template_dict)
 
+    exp_24_areas = {organized_images[0]}
+    
+
     for diviosion in text_division_of_origin_96_well_plate:
         # Get the images for the current experiment based on their original wells
         exp_images = group_expriment_images(diviosion, list(organized_images.keys()))
@@ -93,15 +95,6 @@ def main():
                 for column_index, item in enumerate(row):
                     areas = calculate_growth_area(exp_images, item["start_y"], item["end_y"], item["start_x"], item["end_x"])
                                 
-
-def get_files_from_directory(path , extension):
-    '''Get the full path to each file with the extension specified from the path'''
-    files = []
-    for file in os.listdir(path):
-        if file.endswith(extension):
-            files.append(os.path.join(path ,file))
-    return files
-
 
 def create_directory(father_directory, nested_directory_name):
     '''
@@ -122,6 +115,15 @@ def create_directory(father_directory, nested_directory_name):
     if not os.path.isdir(new_dir_path):
         os.mkdir(new_dir_path)
     return new_dir_path
+
+
+def get_files_from_directory(path , extension):
+    '''Get the full path to each file with the extension specified from the path'''
+    files = []
+    for file in os.listdir(path):
+        if file.endswith(extension):
+            files.append(os.path.join(path ,file))
+    return files
 
 
 def preprocess_images(input_images, start_row, end_row, start_col, end_col, plate_num, drug_name ,colony_threshold, output_path):
@@ -202,6 +204,7 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, plat
 
     return organized_images
 
+
 def generate_qc_images(organized_images, output_path):
     '''
     Description
@@ -237,6 +240,7 @@ def generate_qc_images(organized_images, output_path):
         cv2.imwrite(f'{output_path}/{image_name}.png', image)
     
     return True 
+
 
 def init_area_containers(plate_format, template_dict):
     '''
@@ -314,33 +318,46 @@ def group_expriment_images(row_txt, paths_to_images):
     return exp_images
 
 
-def calculate_growth_area(organized_images ,start_y, end_y, start_x, end_x):
+def convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format):
     '''
     Description
     -----------
-    Calculate the growth within an area in the images provided in the dictionary
+    Convert the index from the original plate to the index in the experiment plate
     
     Parameters
     ----------
-    organized_images : dict
-        Contains the the images as a dataframe under the keys as provided in the group_expriment_images function
-    start_x : int
-        The start x coordinate of the area
-    end_x : int
-        The end x coordinate of the area
-    start_y : int
-        The start y coordinate of the area
-    end_y : int
-        The end y coordinate of the area
-    
+    origin_row_index : int
+        The row index of the current growth area
+    origin_column_index : int
+        The column index of the current growth area
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+        
     Returns
-    ----------
-    dictionary with the keys as given in the images_dict and the values as the growth area within the area provided
+    -------
+    A string with the well from which the growth area cells were taken - for example "A1"
     '''
-    growth_areas = {}
-    for key, image in organized_images.items():
-        growth_areas[key] = image.iloc[start_y:end_y, start_x:end_x].count()
-    return growth_areas
+    if plate_format == 1536:
+        # Each row from the original plate is multiplied to 4 rows in the experiment plate
+        row_indexes = [origin_well_row + i for i in range(4)]
+
+        # Based on the column index of the original plate map to the column index of the experiment plate
+        # Since everythin is indexed on base 0 the column indexes are reduced by 1
+        if origin_well_column in [0,4,8]:
+            column_indexes = list(range(1,12))
+        elif origin_well_column in [1,5,9]:
+            column_indexes = list(range(12,24))
+        elif origin_well_column in [2,6,10]:
+            column_indexes = list(range(25,37))
+        elif origin_well_column in [3,7,11]:
+            column_indexes = list(range(36,48))
+
+        # All the growth areas that originated from the same well in the original well
+        # are given by the product of the row and column indexes as done here
+        return itertools.product(row_indexes, column_indexes)
+
+    else:
+        raise ValueError(f'Format {plate_format} is not supported')
 
 
 def get_growth_areas(plate_format):
@@ -392,46 +409,34 @@ def get_growth_areas(plate_format):
     return areas
 
 
-def convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format):
+def calculate_growth_area(organized_images ,start_y, end_y, start_x, end_x):
     '''
     Description
     -----------
-    Convert the index from the original plate to the index in the experiment plate
+    Calculate the growth within an area in the images provided in the dictionary
     
     Parameters
     ----------
-    origin_row_index : int
-        The row index of the current growth area
-    origin_column_index : int
-        The column index of the current growth area
-    plate_format : int
-        how many growth areas are in the image (96, 384, 1536)
-        
+    organized_images : dict
+        Contains the the images as a dataframe under the keys as provided in the group_expriment_images function
+    start_x : int
+        The start x coordinate of the area
+    end_x : int
+        The end x coordinate of the area
+    start_y : int
+        The start y coordinate of the area
+    end_y : int
+        The end y coordinate of the area
+    
     Returns
-    -------
-    A string with the well from which the growth area cells were taken - for example "A1"
+    ----------
+    dictionary with the keys as given in the images_dict and the values as the growth area within the area provided
     '''
-    if plate_format == 1536:
-        # Each row from the original plate is multiplied to 4 rows in the experiment plate
-        row_indexes = [origin_well_row + i for i in range(4)]
+    growth_areas = {}
+    for key, image in organized_images.items():
+        growth_areas[key] = image.iloc[start_y:end_y, start_x:end_x].count()
+    return growth_areas
 
-        # Based on the column index of the original plate map to the column index of the experiment plate
-        # Since everythin is indexed on base 0 the column indexes are reduced by 1
-        if origin_well_column in [0,4,8]:
-            column_indexes = list(range(1,12))
-        elif origin_well_column in [1,5,9]:
-            column_indexes = list(range(12,24))
-        elif origin_well_column in [2,6,10]:
-            column_indexes = list(range(25,37))
-        elif origin_well_column in [3,7,11]:
-            column_indexes = list(range(36,48))
-
-        # All the growth areas that originated from the same well in the original well
-        # are given by the product of the row and column indexes as done here
-        return itertools.product(row_indexes, column_indexes)
-
-    else:
-        raise ValueError(f'Format {plate_format} is not supported')
 
 if __name__ == "__main__":
     main()
