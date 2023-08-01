@@ -5,12 +5,13 @@ import pathlib
 import argparse
 import itertools
 import numpy as np
+import pandas as pd
 
 def main():
     # Set up the argument parser
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--path', help='The path to the pictures directory', required=True)
-    parser.add_argument('-n', '--number', help='The plate number', required=True)
+    parser.add_argument('-n', '--number', help='The plate number', default=1)
     parser.add_argument('-d', '--drug', help='The drug name', required=True)
     parser.add_argument('-f', '--format', help='The layout of colonies of the plate (384, 1536)', required=True)
     parser.add_argument('-ct', '--colony_threshold', help='The threshold for the colony detection as the intesity of the grayscale pixel. (0,255)', required=True)
@@ -50,10 +51,14 @@ def main():
     end_col = picture_trim_info["end_col"]
 
     text_division_of_origin_96_well_plate = config["text_division_of_origin_96_well_plate"]
-    numaric_division_of_origin_96_well_plate = config["numaric_division_of_origin_96_well_plate"]
+    #numaric_division_of_origin_96_well_plate = config["numaric_division_of_origin_96_well_plate"]
     
+    # Create the output directories
     output_dir_images = create_directory(path, f'ISO_PL_{plate_num}_preproccesed_images')
     QC_dir = create_directory(path, f'QC_ISO_PL_{plate_num}')
+    # Create the output directories for the processed data
+    output_dir_processed_data = create_directory(path, f'ISO_PL_{plate_num}_processed_data')
+
     
     organized_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, plate_num, drug_name, colony_threshold, output_dir_images)
 
@@ -72,31 +77,21 @@ def main():
     
     # Store the future area lists each under the wells in the original 96 well plate
     template_dict = {text_division_of_origin_96_well_plate[0]: "", text_division_of_origin_96_well_plate[1]: "", text_division_of_origin_96_well_plate[2]: ""}
-    exp_24_areas, ND_24_areas, exp_48_areas, ND_48_areas = init_area_containers(plate_format, template_dict)
+    exp_24_areas, ND_24_areas, exp_48_areas, ND_48_areas = init_area_containers(plate_format, template_dict)    
 
-    exp_24_areas = {organized_images[0]}
+    calculated_areas = {}
+    for image_name, image in organized_images.items():
+        image_areas = calculate_growth_area(image_name ,image, growth_areas)
+        calculated_areas[image_name] = image_areas[image_name]
+
+    raw_data_df = organize_raw_data(calculated_areas, plate_format)
+    # Save the raw data as excel file
+    df_for_excel = raw_data_df.reset_index()
+    df_for_excel.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.xlsx'), index=False)
+
     
 
-    for diviosion in text_division_of_origin_96_well_plate:
-        # Get the images for the current experiment based on their original wells
-        exp_images = group_expriment_images(diviosion, list(organized_images.keys()))
-
-        # Get the growth areas for each well in the original 96 well plate
-        for origin_well_row_index, origin_well_column_index in origin_wells:
-            exp_growth_areas = list(convert_original_index_to_experiment_wells_indexes(origin_well_row_index, origin_well_column_index, plate_format))
-            
-            # Get the growth areas for the current well in all plates
-            row_slice = slice(exp_growth_areas[0][0],exp_growth_areas[-1][0] + 1)
-            column_slice = slice(exp_growth_areas[0][1],exp_growth_areas[-1][-1] + 1)
-
-            well_growth_areas = growth_areas[row_slice, column_slice]
-            
-            for row_index, row in enumerate(well_growth_areas):
-                for column_index, item in enumerate(row):
-                    areas = calculate_growth_area(exp_images, item["start_y"], item["end_y"], item["start_x"], item["end_x"])
-                                
-
-def create_directory(father_directory, nested_directory_name):
+def create_directory(parent_directory, nested_directory_name):
     '''
     Description
     -----------
@@ -104,13 +99,13 @@ def create_directory(father_directory, nested_directory_name):
     
     Parameters
     ----------
-    father_directory : str
+    parent_directory : str
         The path to the directory under which the new directory will be created
     nested_directory_name : str
         The name of the nested directory to be created
     '''
     # Create the output directory path
-    new_dir_path = os.path.join(father_directory, nested_directory_name)
+    new_dir_path = os.path.join(parent_directory, nested_directory_name)
     # Create the directory if it does not exist
     if not os.path.isdir(new_dir_path):
         os.mkdir(new_dir_path)
@@ -409,33 +404,123 @@ def get_growth_areas(plate_format):
     return areas
 
 
-def calculate_growth_area(organized_images ,start_y, end_y, start_x, end_x):
+def calculate_growth_area(image_name, image, growth_areas):
     '''
     Description
     -----------
-    Calculate the growth within an area in the images provided in the dictionary
+    Calculate the growth within all the areas in the image provided
     
     Parameters
     ----------
-    organized_images : dict
-        Contains the the images as a dataframe under the keys as provided in the group_expriment_images function
-    start_x : int
-        The start x coordinate of the area
-    end_x : int
-        The end x coordinate of the area
-    start_y : int
-        The start y coordinate of the area
-    end_y : int
-        The end y coordinate of the area
+    image_name : str
+        The name of the image
+    images : numpy array
+        The image in which the growth areas are to be calculated
+    growth_areas : numpy array
+        Contains the coordinates of the growth areas in the images
     
     Returns
     ----------
-    dictionary with the keys as given in the images_dict and the values as the growth area within the area provided
+    key value pair of the image name and a dictionary with the growth areas as keys and the growth area as values
     '''
-    growth_areas = {}
-    for key, image in organized_images.items():
-        growth_areas[key] = image.iloc[start_y:end_y, start_x:end_x].count()
-    return growth_areas
+    areas = {}
+    for row_index, area in enumerate(growth_areas):
+        for column_index, area in enumerate(growth_areas[row_index]):
+            areas[row_index, column_index] = np.count_nonzero(image[area["start_y"] : area["end_y"], area["start_x"] : area["end_x"]] == 255)
+    return {image_name : areas}
+
+
+def organize_raw_data(calculated_areas, plate_format):
+    '''
+    Description
+    -----------
+    Organize the calculated areas into a pandas dataframe
+    Fields:
+        - image_name : str
+        - row_index : int
+        - column_index : int
+        - distance_from_strip : int
+        - area : float
+
+    Parameters
+    ----------
+    calculated_areas : dict
+        A dictionary with the image names as keys and the calculated areas as values under the row and column indexes as keys
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+        
+    Returns
+    -------
+    pandas dataframe
+        A dataframe with the fields as described above
+    '''
+
+    # Set up the fields of the dataframe
+    file_names = []
+    row_indexes = []
+    column_indexes = []
+    distances_from_strip = []
+    areas = []
+
+    for image_name in calculated_areas:
+        for (column_index, row_index), area in calculated_areas[image_name].items():
+            curr_distance_from_strip = get_distance_from_strip(row_index, plate_format)
+            # If the current growth area is the strip itself, skip it
+            if curr_distance_from_strip == -1:
+                continue
+
+            distances_from_strip.append(curr_distance_from_strip)
+            areas.append(area)
+            file_names.append(image_name)
+            row_indexes.append(row_index)
+            column_indexes.append(column_index)
+            
+
+    df = pd.DataFrame({"file_name": file_names, "row_index": row_indexes, "column_index": column_indexes, "distance_from_strip": distances_from_strip, "area": areas})
+    # Add indexes on file_name, row_index and column_index
+    return df.set_index(["file_name", "row_index", "column_index"], verify_integrity=True)
+
+
+def get_distance_from_strip(row_index, plate_format):
+    '''
+    Description
+    -----------
+    Get the distance of the growth area from the strip
+
+    Parameters
+    ----------
+    row_index : int
+        The row index of the current growth area
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+    
+    Returns
+    -------
+    int
+        The distance of the growth area from the strip
+    '''
+    if plate_format == 1536:
+        # The colonies that are near the leftmost strip and they are going away from it.
+        # Therefore the distance from the strip is the same as the row index
+        if row_index in range(1, 12):
+            return row_index
+        # The colonies that are to the left of the middle strip and they are going away from it
+        # Therefore the distance from the strip is the max index (23) minus the row index
+        elif row_index in range(12, 23):
+            return 23 - row_index
+        # The colonies that are to the right of the middle strip and they are going away from it
+        # Therefore the distance from the strip is the row index minus the min index 24 (25 needs to mapped to 1)
+        elif row_index in range(25, 36):
+            return row_index - 24
+        # The colonies that are left of the rightmost strip and they are going away from it
+        # Therefore the distance from the strip is the max index 47 minus the row index (46 needs to mapped to 1)
+        elif row_index in range(36, 47):
+            return 47 - row_index
+        # The strip itself, rows 0, 23, 24, 47
+        else:
+            return -1        
+    else:
+        raise ValueError(f'Format {plate_format} is not supported')
 
 
 if __name__ == "__main__":
