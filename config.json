@@ -12,5 +12,6 @@
         "step_y": 53.75
     },
     "text_division_of_origin_96_well_plate": ["1-4", "5-8", "9-12"],
-    "numaric_division_of_origin_96_well_plate": [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]] 
+    "numaric_division_of_origin_96_well_plate": [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]],
+    "MIC": 0.5
 }
