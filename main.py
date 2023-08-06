@@ -51,7 +51,7 @@ def main():
     end_col = picture_trim_info["end_col"]
 
     text_division_of_origin_96_well_plate = config["text_division_of_origin_96_well_plate"]
-    #numaric_division_of_origin_96_well_plate = config["numaric_division_of_origin_96_well_plate"]
+    MIC_cutoff = config["MIC"]
     
     # Create the output directories
     output_dir_images = create_directory(path, f'ISO_PL_{plate_num}_preproccesed_images')
@@ -69,25 +69,19 @@ def main():
     if(is_generate_qc):
         generate_qc_images(organized_images, QC_dir)
 
-    # Make a list of the wells in the original 96 well plate
-    origin_wells = itertools.product(range(8), range(12))
-    
     # Get the areas in the experiment plate
     growth_areas = get_growth_areas(plate_format)
     
-    # Store the future area lists each under the wells in the original 96 well plate
-    template_dict = {text_division_of_origin_96_well_plate[0]: "", text_division_of_origin_96_well_plate[1]: "", text_division_of_origin_96_well_plate[2]: ""}
-    exp_24_areas, ND_24_areas, exp_48_areas, ND_48_areas = init_area_containers(plate_format, template_dict)    
-
     calculated_areas = {}
     for image_name, image in organized_images.items():
         image_areas = calculate_growth_area(image_name ,image, growth_areas)
         calculated_areas[image_name] = image_areas[image_name]
 
-    raw_data_df = organize_raw_data(calculated_areas, plate_format)
-    # Save the raw data as excel file
-    df_for_excel = raw_data_df.reset_index()
-    df_for_excel.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.xlsx'), index=False)
+    raw_areas_df = organize_raw_data(calculated_areas, plate_format)
+    raw_areas_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.xlsx'), index=False)
+
+    # Calculate the MIC for each strain
+    MIC_df = calculate_mic(raw_areas_df, plate_format, MIC_cutoff)
 
     
 
@@ -237,44 +231,6 @@ def generate_qc_images(organized_images, output_path):
     return True 
 
 
-def init_area_containers(plate_format, template_dict):
-    '''
-    Description
-    -----------
-    Initialize the containers for the growth areas with the appropriate dimensions for the plate format
-    under the keys as provided in the template dictionary
-    
-    Parameters
-    ----------
-    plate_format : int
-        The format of the plate. Only 1536 is supported at the moment
-    template_dict : dict
-        A dictionary with the keys as the names of the areas and the values as empty strings
-    
-    Returns
-    -------
-    dicts: exp_24_areas, ND_24_areas, exp_48_areas, ND_48_areas
-    with the keys as the names provided in the template dictionary and the values as numpy arrays with the appropriate dimensions
-
-    '''
-
-    exp_24_areas = template_dict.copy()
-    ND_24_areas = template_dict.copy()
-    exp_48_areas = template_dict.copy()
-    ND_48_areas = template_dict.copy()
-
-    if plate_format == 1536:
-        for key in template_dict.keys():
-            exp_24_areas[key] = np.zeros((32, 48), dtype=np.float32)
-            ND_24_areas[key] = np.zeros((32, 48), dtype=np.float32)
-            exp_48_areas[key] = np.zeros((32, 48), dtype=np.float32)
-            ND_48_areas[key] = np.zeros((32, 48), dtype=np.float32)
-    else:
-        raise ValueError('The plate format is not supported')
-    
-    return exp_24_areas, ND_24_areas, exp_48_areas, ND_48_areas
-
-
 def group_expriment_images(row_txt, paths_to_images):
     '''
     Description
@@ -317,7 +273,7 @@ def convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_w
     '''
     Description
     -----------
-    Convert the index from the original plate to the index in the experiment plate
+    Convert the index from the original plate to the indexes in the experiment plate
     
     Parameters
     ----------
@@ -351,6 +307,60 @@ def convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_w
         # are given by the product of the row and column indexes as done here
         return itertools.product(row_indexes, column_indexes)
 
+    else:
+        raise ValueError(f'Format {plate_format} is not supported')
+
+
+def calculate_mic(areas_df, plate_format, MIC_cutoff):
+    '''
+    Description
+    -----------
+    Calculate the MIC for each strain
+    
+    Parameters
+    ----------
+    areas_df : pandas dataframe
+        The dataframe containing the areas of the growth areas
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+    MIC_cutoff : int
+        The cutoff for the MIC (usually 50% growth reduction)
+
+    Returns
+    -------
+    pandas dataframe
+        A dataframe with the MIC for each strain
+    '''
+    
+    # Create lists to later be used for creating the dataframe
+    file_names = []
+    origin_row_indexes = []
+    origin_column_indexes = []
+    distances_from_strip = []
+    MICs = []
+
+    # Make a list of the wells in the original 96 well plate
+    origin_wells = list(itertools.product(range(8), range(12)))
+
+    # Get unique file names
+    unique_file_names = list(areas_df.file_name.unique())
+
+    # Take the name that has 24hr in it and does not have ND in it
+    experiment_plate_24hr = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" not in file_name][0]
+    # Take the name that has 24hr in it and has ND in it
+    control_plate_24hr_ND = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" in file_name][0]
+    # TODO check for more than one file and make needed adjustments
+
+
+    if plate_format == 1536:
+        for (origin_well_row, origin_well_column) in origin_wells:
+            # Get the indexes of the growth areas in the experiment plate
+            experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
+            # Calculate the mean of the growth areas in the ND plate
+            ND_mean = areas_df.loc[(areas_df.file_name == control_plate_24hr_ND) & (areas_df.row_index <= experiment_well_indexes[0][-1]), "area"].mean()
+            
+
+                
     else:
         raise ValueError(f'Format {plate_format} is not supported')
 
@@ -476,9 +486,7 @@ def organize_raw_data(calculated_areas, plate_format):
             column_indexes.append(column_index)
             
 
-    df = pd.DataFrame({"file_name": file_names, "row_index": row_indexes, "column_index": column_indexes, "distance_from_strip": distances_from_strip, "area": areas})
-    # Add indexes on file_name, row_index and column_index
-    return df.set_index(["file_name", "row_index", "column_index"], verify_integrity=True)
+    return pd.DataFrame({"file_name": file_names, "row_index": row_indexes, "column_index": column_indexes, "distance_from_strip": distances_from_strip, "area": areas})
 
 
 def get_distance_from_strip(row_index, plate_format):
