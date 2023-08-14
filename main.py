@@ -297,11 +297,11 @@ def convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_w
         if origin_well_column in [0,4,8]:
             column_indexes = list(range(1,12))
         elif origin_well_column in [1,5,9]:
-            column_indexes = list(range(12,24))
+            column_indexes = list(range(12,23))
         elif origin_well_column in [2,6,10]:
-            column_indexes = list(range(25,37))
+            column_indexes = list(range(25,36))
         elif origin_well_column in [3,7,11]:
-            column_indexes = list(range(36,48))
+            column_indexes = list(range(36,47))
 
         # All the growth areas that originated from the same well in the original well
         # are given by the product of the row and column indexes as done here
@@ -336,7 +336,6 @@ def calculate_mic(areas_df, plate_format, MIC_cutoff):
     file_names = []
     origin_row_indexes = []
     origin_column_indexes = []
-    distances_from_strip = []
     MICs = []
 
     # Make a list of the wells in the original 96 well plate
@@ -356,11 +355,31 @@ def calculate_mic(areas_df, plate_format, MIC_cutoff):
         for (origin_well_row, origin_well_column) in origin_wells:
             # Get the indexes of the growth areas in the experiment plate
             experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
-            # Calculate the mean of the growth areas in the ND plate
-            ND_mean = areas_df.loc[(areas_df.file_name == control_plate_24hr_ND) & (areas_df.row_index <= experiment_well_indexes[0][-1]), "area"].mean()
             
+            # Since a 1536 plate has 8 time the rows a 96 well plate, but the rows in the 1536
+            # are divided into groups of 4 in our case, we need to multiply the row index by 4
+            # to get the correct row index in the 1536 plate
+            exp_row = origin_well_row * 4
 
-                
+            # Calculate the mean of the growth areas in the ND plate
+            ND_growth_areas = areas_df.loc[(areas_df.file_name == control_plate_24hr_ND) &
+                                           ((areas_df.row_index >= exp_row) & 
+                                            (areas_df.row_index <= exp_row + 3)) &
+                                           ((areas_df.column_index <= experiment_well_indexes[-1][-1]) &
+                                            (areas_df.column_index >= experiment_well_indexes[0][-1])), :]
+
+            ND_mean = ND_growth_areas['area'].mean()
+
+            # Find the MIC by finding the first growth area that has a mean of less than ND_mean * MIC_cutoff
+            exp_growth_areas = areas_df.loc[(areas_df.file_name == experiment_plate_24hr) &
+                                            ((areas_df.row_index >= exp_row) &
+                                                (areas_df.row_index <= exp_row + 3)) &
+                                            ((areas_df.column_index <= experiment_well_indexes[-1][-1]) &
+                                                (areas_df.column_index >= experiment_well_indexes[0][-1])), :]
+            
+            exp_mean_growth_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean()
+            print(exp_mean_growth_by_distance_from_strip)
+          
     else:
         raise ValueError(f'Format {plate_format} is not supported')
 
@@ -473,8 +492,8 @@ def organize_raw_data(calculated_areas, plate_format):
     areas = []
 
     for image_name in calculated_areas:
-        for (column_index, row_index), area in calculated_areas[image_name].items():
-            curr_distance_from_strip = get_distance_from_strip(row_index, plate_format)
+        for (row_index, column_index), area in calculated_areas[image_name].items():
+            curr_distance_from_strip = get_distance_from_strip(column_index, plate_format)
             # If the current growth area is the strip itself, skip it
             if curr_distance_from_strip == -1:
                 continue
@@ -489,7 +508,7 @@ def organize_raw_data(calculated_areas, plate_format):
     return pd.DataFrame({"file_name": file_names, "row_index": row_indexes, "column_index": column_indexes, "distance_from_strip": distances_from_strip, "area": areas})
 
 
-def get_distance_from_strip(row_index, plate_format):
+def get_distance_from_strip(column_index, plate_format):
     '''
     Description
     -----------
@@ -497,8 +516,8 @@ def get_distance_from_strip(row_index, plate_format):
 
     Parameters
     ----------
-    row_index : int
-        The row index of the current growth area
+    column_index : int
+        The column index of the growth area
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
     
@@ -510,20 +529,20 @@ def get_distance_from_strip(row_index, plate_format):
     if plate_format == 1536:
         # The colonies that are near the leftmost strip and they are going away from it.
         # Therefore the distance from the strip is the same as the row index
-        if row_index in range(1, 12):
-            return row_index
+        if column_index in range(1, 12):
+            return column_index
         # The colonies that are to the left of the middle strip and they are going away from it
         # Therefore the distance from the strip is the max index (23) minus the row index
-        elif row_index in range(12, 23):
-            return 23 - row_index
+        elif column_index in range(12, 23):
+            return 23 - column_index
         # The colonies that are to the right of the middle strip and they are going away from it
         # Therefore the distance from the strip is the row index minus the min index 24 (25 needs to mapped to 1)
-        elif row_index in range(25, 36):
-            return row_index - 24
+        elif column_index in range(25, 36):
+            return column_index - 24
         # The colonies that are left of the rightmost strip and they are going away from it
         # Therefore the distance from the strip is the max index 47 minus the row index (46 needs to mapped to 1)
-        elif row_index in range(36, 47):
-            return 47 - row_index
+        elif column_index in range(36, 47):
+            return 47 - column_index
         # The strip itself, rows 0, 23, 24, 47
         else:
             return -1        
