@@ -81,9 +81,11 @@ def main():
     raw_areas_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.xlsx'), index=False)
 
     # Calculate the MIC for each strain
-    MIC_df = calculate_mic(raw_areas_df, plate_format, MIC_cutoff)
-
+    MIC_df = calculate_mic(raw_areas_df, plate_format, MIC_cutoff, text_division_of_origin_96_well_plate)
     
+    
+
+
 
 def create_directory(parent_directory, nested_directory_name):
     '''
@@ -311,7 +313,7 @@ def convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_w
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def calculate_mic(areas_df, plate_format, MIC_cutoff):
+def calculate_mic(areas_df, plate_format, MIC_cutoff, text_division_of_origin_96_well_plate):
     '''
     Description
     -----------
@@ -325,6 +327,9 @@ def calculate_mic(areas_df, plate_format, MIC_cutoff):
         how many growth areas are in the image (96, 384, 1536)
     MIC_cutoff : int
         The cutoff for the MIC (usually 50% growth reduction)
+    text_division_of_origin_96_well_plate : str
+        The text division of the original plate layout that the images were generated from.
+        Usually ['1-4', '5-8', '9-12']
 
     Returns
     -------
@@ -345,40 +350,73 @@ def calculate_mic(areas_df, plate_format, MIC_cutoff):
     unique_file_names = list(areas_df.file_name.unique())
 
     # Take the name that has 24hr in it and does not have ND in it
-    experiment_plate_24hr = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" not in file_name][0]
+    experiment_plates_24hr = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" not in file_name]
     # Take the name that has 24hr in it and has ND in it
-    control_plate_24hr_ND = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" in file_name][0]
-    # TODO check for more than one file and make needed adjustments
-
+    control_plates_24hr_ND = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" in file_name]
+    
 
     if plate_format == 1536:
-        for (origin_well_row, origin_well_column) in origin_wells:
-            # Get the indexes of the growth areas in the experiment plate
-            experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
-            
-            # Since a 1536 plate has 8 time the rows a 96 well plate, but the rows in the 1536
-            # are divided into groups of 4 in our case, we need to multiply the row index by 4
-            # to get the correct row index in the 1536 plate
-            exp_row = origin_well_row * 4
+        # Find the pairs of plates as needed for the calculation of the MIC
+        for division in text_division_of_origin_96_well_plate: 
+            control_plate_24hr_ND = [plate for plate in control_plates_24hr_ND if division in plate]
+            experiment_plate_24hr = [plate for plate in experiment_plates_24hr if division in plate]
 
-            # Calculate the mean of the growth areas in the ND plate
-            ND_growth_areas = areas_df.loc[(areas_df.file_name == control_plate_24hr_ND) &
-                                           ((areas_df.row_index >= exp_row) & 
-                                            (areas_df.row_index <= exp_row + 3)) &
-                                           ((areas_df.column_index <= experiment_well_indexes[-1][-1]) &
-                                            (areas_df.column_index >= experiment_well_indexes[0][-1])), :]
+            # If either are empty that means that the expriement was not done for less strains
+            if len(control_plate_24hr_ND) == 0 or len(experiment_plate_24hr) == 0:
+                continue
+            elif len(control_plate_24hr_ND) > 1 or len(experiment_plate_24hr) > 1:
+                raise ValueError(f'There are more than one plate for {division}')
 
-            ND_mean = ND_growth_areas['area'].mean()
+            control_plate_24hr_ND = control_plate_24hr_ND[0]
+            experiment_plate_24hr = experiment_plate_24hr[0]
 
-            # Find the MIC by finding the first growth area that has a mean of less than ND_mean * MIC_cutoff
-            exp_growth_areas = areas_df.loc[(areas_df.file_name == experiment_plate_24hr) &
-                                            ((areas_df.row_index >= exp_row) &
+            for (origin_well_row, origin_well_column) in origin_wells:
+                # Get the indexes of the growth areas in the experiment plate
+                experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
+                
+                # Since a 1536 plate has 8 time the rows a 96 well plate, but the rows in the 1536
+                # are divided into groups of 4 in our case, we need to multiply the row index by 4
+                # to get the correct row index in the 1536 plate
+                exp_row = origin_well_row * 4
+
+                # Calculate the mean of the growth areas in the ND plate
+                ND_growth_areas = areas_df.loc[(areas_df.file_name == control_plate_24hr_ND) &
+                                            ((areas_df.row_index >= exp_row) & 
                                                 (areas_df.row_index <= exp_row + 3)) &
                                             ((areas_df.column_index <= experiment_well_indexes[-1][-1]) &
                                                 (areas_df.column_index >= experiment_well_indexes[0][-1])), :]
-            
-            exp_mean_growth_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean()
-            print(exp_mean_growth_by_distance_from_strip)
+
+                ND_mean = ND_growth_areas['area'].mean()
+
+                # Find the MIC by finding the first growth area that has a mean of less than ND_mean * MIC_cutoff
+                exp_growth_areas = areas_df.loc[(areas_df.file_name == experiment_plate_24hr) &
+                                                ((areas_df.row_index >= exp_row) &
+                                                    (areas_df.row_index <= exp_row + 3)) &
+                                                ((areas_df.column_index <= experiment_well_indexes[-1][-1]) &
+                                                    (areas_df.column_index >= experiment_well_indexes[0][-1])), :]
+                
+                exp_mean_growth_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values
+
+                # Find the first growth area that has a mean of less than ND_mean * MIC_cutoff
+                MIC_distance = -1
+                for i, growth_area in enumerate(exp_mean_growth_by_distance_from_strip[::-1]):
+                    if growth_area < ND_mean * MIC_cutoff:
+                        MIC_distance = len(exp_mean_growth_by_distance_from_strip) - i
+                        break
+                
+                # Add the file name, origin row and column indexes, and the MIC
+                file_names.append(experiment_plate_24hr)
+                origin_row_indexes.append(origin_well_row)
+                origin_column_indexes.append(origin_well_column)
+                MICs.append(MIC_distance)
+
+        # Create the dataframe
+        MIC_df = pd.DataFrame({'file_name': file_names,
+                                'origin_row_index': origin_row_indexes,
+                                'origin_column_index': origin_column_indexes,
+                                'MIC': MICs})
+        return MIC_df
+
           
     else:
         raise ValueError(f'Format {plate_format} is not supported')
@@ -527,23 +565,25 @@ def get_distance_from_strip(column_index, plate_format):
         The distance of the growth area from the strip
     '''
     if plate_format == 1536:
+        # The strip itself is at columns: 0, 1, 22, 23, 24, 25, 46, 47
+
         # The colonies that are near the leftmost strip and they are going away from it.
-        # Therefore the distance from the strip is the same as the row index
-        if column_index in range(1, 12):
-            return column_index
+        # Therefore the distance from the strip is the same as the column_index -1 
+        # column index 2 needs to be mapped to 1
+        if column_index in range(2, 12):
+            return column_index - 1
         # The colonies that are to the left of the middle strip and they are going away from it
-        # Therefore the distance from the strip is the max index (23) minus the row index
-        elif column_index in range(12, 23):
-            return 23 - column_index
+        # Therefore the distance from the strip is the max index (23) minus the column_index
+        elif column_index in range(12, 22):
+            return 22 - column_index
         # The colonies that are to the right of the middle strip and they are going away from it
-        # Therefore the distance from the strip is the row index minus the min index 24 (25 needs to mapped to 1)
-        elif column_index in range(25, 36):
-            return column_index - 24
+        # Therefore the distance from the strip is the column_index minus the min index 25 (26 needs to mapped to 1)
+        elif column_index in range(26, 36):
+            return column_index - 25
         # The colonies that are left of the rightmost strip and they are going away from it
-        # Therefore the distance from the strip is the max index 47 minus the row index (46 needs to mapped to 1)
-        elif column_index in range(36, 47):
-            return 47 - column_index
-        # The strip itself, rows 0, 23, 24, 47
+        # Therefore the distance from the strip is the max index 46 minus the column_index (45 needs to mapped to 1)
+        elif column_index in range(36, 46):
+            return 46 - column_index
         else:
             return -1        
     else:
