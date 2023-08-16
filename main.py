@@ -83,8 +83,20 @@ def main():
     # Calculate the MIC for each strain
     MIC_df = calculate_mic(raw_areas_df, plate_format, MIC_cutoff, text_division_of_origin_96_well_plate)
     
-    
+    FoG_df = calculate_FoG(raw_areas_df, MIC_df, plate_format, text_division_of_origin_96_well_plate)
 
+    # Merge the MIC and FoG dataframes on row_index, column_index
+    processed_data_df = pd.merge(MIC_df, FoG_df, on=['row_index', 'column_index'])
+    processed_data_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
+
+
+def get_files_from_directory(path , extension):
+    '''Get the full path to each file with the extension specified from the path'''
+    files = []
+    for file in os.listdir(path):
+        if file.endswith(extension):
+            files.append(os.path.join(path ,file))
+    return files
 
 
 def create_directory(parent_directory, nested_directory_name):
@@ -106,15 +118,6 @@ def create_directory(parent_directory, nested_directory_name):
     if not os.path.isdir(new_dir_path):
         os.mkdir(new_dir_path)
     return new_dir_path
-
-
-def get_files_from_directory(path , extension):
-    '''Get the full path to each file with the extension specified from the path'''
-    files = []
-    for file in os.listdir(path):
-        if file.endswith(extension):
-            files.append(os.path.join(path ,file))
-    return files
 
 
 def preprocess_images(input_images, start_row, end_row, start_col, end_col, plate_num, drug_name ,colony_threshold, output_path):
@@ -231,195 +234,6 @@ def generate_qc_images(organized_images, output_path):
         cv2.imwrite(f'{output_path}/{image_name}.png', image)
     
     return True 
-
-
-def group_expriment_images(row_txt, paths_to_images):
-    '''
-    Description
-    -----------
-    get all the paths to the files containing the images for each experiment by wells
-
-    Parameters
-    ----------
-    row_txt : str
-        The text desrction of the wells in the intial plate layout that the images were generated from
-    paths_to_images : list
-        A list of the paths to the images that were generated from the initial plate layout after segmentation
-    
-    Returns
-    ----------
-    dict with the following structure:
-    {
-        "24hr_ND" : "image_path_24hr_ND",
-        "24hr" : "image_path_24hr",
-        "48hr_ND" : "image_path_48hr_ND",
-        "48hr" : "image_path_48hr"
-    }
-    '''
-    exp_images = {}
-    for i, image_path in enumerate(paths_to_images):
-        if row_txt in image_path:
-            if "24hr" in image_path and "ND" in image_path:
-                exp_images["24hr_ND"] = image_path
-            elif "24hr" in image_path:
-                exp_images["24hr"] = image_path
-            elif "48hr" in image_path and "ND" in image_path:
-                exp_images["48hr_ND"] = image_path
-            elif "48hr" in image_path:
-                exp_images["48hr"] = image_path
-    
-    return exp_images
-
-
-def convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format):
-    '''
-    Description
-    -----------
-    Convert the index from the original plate to the indexes in the experiment plate
-    
-    Parameters
-    ----------
-    origin_row_index : int
-        The row index of the current growth area
-    origin_column_index : int
-        The column index of the current growth area
-    plate_format : int
-        how many growth areas are in the image (96, 384, 1536)
-        
-    Returns
-    -------
-    A string with the well from which the growth area cells were taken - for example "A1"
-    '''
-    if plate_format == 1536:
-        # Each row from the original plate is multiplied to 4 rows in the experiment plate
-        row_indexes = [origin_well_row + i for i in range(4)]
-
-        # Based on the column index of the original plate map to the column index of the experiment plate
-        # Since everythin is indexed on base 0 the column indexes are reduced by 1
-        if origin_well_column in [0,4,8]:
-            column_indexes = list(range(1,12))
-        elif origin_well_column in [1,5,9]:
-            column_indexes = list(range(12,23))
-        elif origin_well_column in [2,6,10]:
-            column_indexes = list(range(25,36))
-        elif origin_well_column in [3,7,11]:
-            column_indexes = list(range(36,47))
-
-        # All the growth areas that originated from the same well in the original well
-        # are given by the product of the row and column indexes as done here
-        return itertools.product(row_indexes, column_indexes)
-
-    else:
-        raise ValueError(f'Format {plate_format} is not supported')
-
-
-def calculate_mic(areas_df, plate_format, MIC_cutoff, text_division_of_origin_96_well_plate):
-    '''
-    Description
-    -----------
-    Calculate the MIC for each strain
-    
-    Parameters
-    ----------
-    areas_df : pandas dataframe
-        The dataframe containing the areas of the growth areas
-    plate_format : int
-        how many growth areas are in the image (96, 384, 1536)
-    MIC_cutoff : int
-        The cutoff for the MIC (usually 50% growth reduction)
-    text_division_of_origin_96_well_plate : str
-        The text division of the original plate layout that the images were generated from.
-        Usually ['1-4', '5-8', '9-12']
-
-    Returns
-    -------
-    pandas dataframe
-        A dataframe with the MIC for each strain
-    '''
-    
-    # Create lists to later be used for creating the dataframe
-    file_names = []
-    origin_row_indexes = []
-    origin_column_indexes = []
-    MICs = []
-
-    # Make a list of the wells in the original 96 well plate
-    origin_wells = list(itertools.product(range(8), range(12)))
-
-    # Get unique file names
-    unique_file_names = list(areas_df.file_name.unique())
-
-    # Take the name that has 24hr in it and does not have ND in it
-    experiment_plates_24hr = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" not in file_name]
-    # Take the name that has 24hr in it and has ND in it
-    control_plates_24hr_ND = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" in file_name]
-    
-
-    if plate_format == 1536:
-        # Find the pairs of plates as needed for the calculation of the MIC
-        for division in text_division_of_origin_96_well_plate: 
-            control_plate_24hr_ND = [plate for plate in control_plates_24hr_ND if division in plate]
-            experiment_plate_24hr = [plate for plate in experiment_plates_24hr if division in plate]
-
-            # If either are empty that means that the expriement was not done for less strains
-            if len(control_plate_24hr_ND) == 0 or len(experiment_plate_24hr) == 0:
-                continue
-            elif len(control_plate_24hr_ND) > 1 or len(experiment_plate_24hr) > 1:
-                raise ValueError(f'There are more than one plate for {division}')
-
-            control_plate_24hr_ND = control_plate_24hr_ND[0]
-            experiment_plate_24hr = experiment_plate_24hr[0]
-
-            for (origin_well_row, origin_well_column) in origin_wells:
-                # Get the indexes of the growth areas in the experiment plate
-                experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
-                
-                # Since a 1536 plate has 8 time the rows a 96 well plate, but the rows in the 1536
-                # are divided into groups of 4 in our case, we need to multiply the row index by 4
-                # to get the correct row index in the 1536 plate
-                exp_row = origin_well_row * 4
-
-                # Calculate the mean of the growth areas in the ND plate
-                ND_growth_areas = areas_df.loc[(areas_df.file_name == control_plate_24hr_ND) &
-                                            ((areas_df.row_index >= exp_row) & 
-                                                (areas_df.row_index <= exp_row + 3)) &
-                                            ((areas_df.column_index <= experiment_well_indexes[-1][-1]) &
-                                                (areas_df.column_index >= experiment_well_indexes[0][-1])), :]
-
-                ND_mean = ND_growth_areas['area'].mean()
-
-                # Find the MIC by finding the first growth area that has a mean of less than ND_mean * MIC_cutoff
-                exp_growth_areas = areas_df.loc[(areas_df.file_name == experiment_plate_24hr) &
-                                                ((areas_df.row_index >= exp_row) &
-                                                    (areas_df.row_index <= exp_row + 3)) &
-                                                ((areas_df.column_index <= experiment_well_indexes[-1][-1]) &
-                                                    (areas_df.column_index >= experiment_well_indexes[0][-1])), :]
-                
-                exp_mean_growth_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values
-
-                # Find the first growth area that has a mean of less than ND_mean * MIC_cutoff
-                MIC_distance = -1
-                for i, growth_area in enumerate(exp_mean_growth_by_distance_from_strip[::-1]):
-                    if growth_area < ND_mean * MIC_cutoff:
-                        MIC_distance = len(exp_mean_growth_by_distance_from_strip) - i
-                        break
-                
-                # Add the file name, origin row and column indexes, and the MIC
-                file_names.append(experiment_plate_24hr)
-                origin_row_indexes.append(origin_well_row)
-                origin_column_indexes.append(origin_well_column)
-                MICs.append(MIC_distance)
-
-        # Create the dataframe
-        MIC_df = pd.DataFrame({'file_name': file_names,
-                                'origin_row_index': origin_row_indexes,
-                                'origin_column_index': origin_column_indexes,
-                                'MIC': MICs})
-        return MIC_df
-
-          
-    else:
-        raise ValueError(f'Format {plate_format} is not supported')
 
 
 def get_growth_areas(plate_format):
@@ -586,6 +400,306 @@ def get_distance_from_strip(column_index, plate_format):
             return 46 - column_index
         else:
             return -1        
+    else:
+        raise ValueError(f'Format {plate_format} is not supported')
+
+
+def calculate_mic(areas_df, plate_format, MIC_cutoff, text_division_of_origin_96_well_plate):
+    '''
+    Description
+    -----------
+    Calculate the MIC for each strain
+    
+    Parameters
+    ----------
+    areas_df : pandas dataframe
+        The dataframe containing the areas of the growth areas
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+    MIC_cutoff : int
+        The cutoff for the MIC (usually 50% growth reduction)
+    text_division_of_origin_96_well_plate : str
+        The text division of the original plate layout that the images were generated from.
+        Usually ['1-4', '5-8', '9-12']
+
+    Returns
+    -------
+    A pandas dataframe with the following columns:
+        file_name : str
+            The name of the file from which the growth area was taken
+        origin_row_index : int
+            The row index of the well from which the growth area was taken
+        origin_column_index : int
+            The column index of the well from which the growth area was taken
+        MIC : float
+            The MIC of the strain in the well from which the growth area was taken
+    '''
+    
+    # Create lists to later be used for creating the dataframe
+    file_names = []
+    origin_row_indexes = []
+    origin_column_indexes = []
+    MICs = []
+
+    # Make a list of the wells in the original 96 well plate
+    origin_wells = create_96_well_plate_layout()
+
+    # Get unique file names
+    unique_file_names = list(areas_df.file_name.unique())
+
+    # Take the name that has 24hr in it and does not have ND in it
+    experiment_plates_24hr = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" not in file_name]
+    # Take the name that has 24hr in it and has ND in it
+    control_plates_24hr_ND = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" in file_name]
+    
+
+    if plate_format == 1536:
+        # Find the pairs of plates as needed for the calculation of the MIC
+        for division in text_division_of_origin_96_well_plate:
+            experiment_plate_24hr = [plate for plate in experiment_plates_24hr if division in plate]
+            control_plate_24hr_ND = [plate for plate in control_plates_24hr_ND if division in plate]
+            
+            # If either are empty that means that the expriement was not done for less strains
+            if len(control_plate_24hr_ND) == 0 or len(experiment_plate_24hr) == 0:
+                continue
+            elif len(control_plate_24hr_ND) > 1 or len(experiment_plate_24hr) > 1:
+                raise ValueError(f'There are more than one plate for {division}')
+
+            control_plate_24hr_ND = control_plate_24hr_ND[0]
+            experiment_plate_24hr = experiment_plate_24hr[0]
+
+            for (origin_well_row, origin_well_column) in origin_wells:
+                # Get the indexes of the growth areas in the experiment plate
+                experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
+                
+                # Since a 1536 plate has 8 time the rows a 96 well plate, but the rows in the 1536
+                # are divided into groups of 4 in our case, we need to multiply the row index by 4
+                # to get the correct row index in the 1536 plate
+                exp_row = origin_well_row * 4
+
+                ND_mean_df_rows = get_plate_growth_areas(areas_df, control_plate_24hr_ND, exp_row, experiment_well_indexes, plate_format)
+
+                ND_mean = ND_mean_df_rows.area.mean()
+
+                # Find the MIC by finding the first growth area that has a mean of less than ND_mean * MIC_cutoff
+                exp_growth_areas = get_plate_growth_areas(areas_df, experiment_plate_24hr, exp_row, experiment_well_indexes, plate_format)
+                
+                exp_mean_growth_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values
+
+                # Find the first growth area that has a mean of less than ND_mean * MIC_cutoff
+                MIC_distance = -1
+                for i, growth_area in enumerate(exp_mean_growth_by_distance_from_strip[::-1]):
+                    if growth_area < ND_mean * MIC_cutoff:
+                        MIC_distance = len(exp_mean_growth_by_distance_from_strip) - i
+                        break
+                
+                # Add the file name, origin row and column indexes, and the MIC
+                file_names.append(experiment_plate_24hr)
+                origin_row_indexes.append(origin_well_row)
+                origin_column_indexes.append(origin_well_column)
+                MICs.append(MIC_distance)
+
+        # Create the dataframe
+        MIC_df = pd.DataFrame({'file_name_24hr': file_names,
+                                'row_index': origin_row_indexes,
+                                'column_index': origin_column_indexes,
+                                'MIC': MICs})
+        return MIC_df
+
+          
+    else:
+        raise ValueError(f'Format {plate_format} is not supported')
+
+
+def create_96_well_plate_layout():
+    return list(itertools.product(range(8), range(12)))
+
+
+def convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format):
+    '''
+    Description
+    -----------
+    Convert the index from the original plate to the indexes in the experiment plate
+    
+    Parameters
+    ----------
+    origin_row_index : int
+        The row index of the current growth area
+    origin_column_index : int
+        The column index of the current growth area
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+        
+    Returns
+    -------
+    A string with the well from which the growth area cells were taken - for example "A1"
+    '''
+    if plate_format == 1536:
+        # Each row from the original plate is multiplied to 4 rows in the experiment plate
+        row_indexes = [origin_well_row + i for i in range(4)]
+
+        # Based on the column index of the original plate map to the column index of the experiment plate
+        # Since everythin is indexed on base 0 the column indexes are reduced by 1
+        if origin_well_column in [0,4,8]:
+            column_indexes = list(range(1,12))
+        elif origin_well_column in [1,5,9]:
+            column_indexes = list(range(12,23))
+        elif origin_well_column in [2,6,10]:
+            column_indexes = list(range(25,36))
+        elif origin_well_column in [3,7,11]:
+            column_indexes = list(range(36,47))
+
+        # All the growth areas that originated from the same well in the original well
+        # are given by the product of the row and column indexes as done here
+        return itertools.product(row_indexes, column_indexes)
+
+    else:
+        raise ValueError(f'Format {plate_format} is not supported')
+
+
+def get_plate_growth_areas(areas_df, plate_name, experiment_begin_row, experiment_well_indexes, plate_format):
+    '''
+    Description
+    -----------
+    Get the growth areas from the plate that was used in the experiment
+
+    Parameters
+    ----------
+    areas_df : pandas dataframe
+        The dataframe containing the areas of the growth areas
+    plate_name : str
+        The name of the plate from which the growth areas were taken
+    experiment_begin_row : int
+        The row index of the first growth area in the experiment plate
+    experiment_well_indexes : list
+        A list of the indexes of the wells in the experiment plate that were used in the experiment
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+    
+    Returns
+    -------
+    A pandas dataframe containing the growth areas from the plate that was used in the experiment
+    '''
+    if plate_format == 1536:
+        return areas_df.loc[(areas_df.file_name == plate_name) &
+                                            ((areas_df.row_index >= experiment_begin_row) & 
+                                                (areas_df.row_index <= experiment_begin_row + 3)) &
+                                            ((areas_df.column_index <= experiment_well_indexes[-1][-1]) &
+                                                (areas_df.column_index >= experiment_well_indexes[0][-1])), :]
+    else:
+        raise ValueError(f'Format {plate_format} is not supported')
+
+
+def calculate_FoG(areas_df, MIC_df, plate_format, text_division_of_origin_96_well_plate):
+    '''
+    Description
+    -----------
+    Calculate the FoG (Fraction of Growth) for each starin in the origin plate
+
+    Parameters
+    ----------
+    areas_df : pandas dataframe
+        The dataframe containing the areas of the growth areas
+    MIC_df : pandas dataframe
+        The dataframe containing the MIC values of the strains
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+    The text division of the original plate layout that the images were generated from.
+        Usually ['1-4', '5-8', '9-12']
+
+    Returns
+    -------
+    A pandas dataframe with the following columns:
+        file_name : str
+            The name of the file from which the growth area was taken
+        origin_row_index : int
+            The row index of the well from which the growth area was taken
+        origin_column_index : int
+            The column index of the well from which the growth area was taken
+        FoG : float
+            The fraction of growth of the well from which the growth area was taken
+    
+    '''
+
+    # Create lists to later be used for creating the dataframe
+    file_names = []
+    origin_row_indexes = []
+    origin_column_indexes = []
+    FoGs = []
+
+    # Make a list of the wells in the original 96 well plate
+    origin_wells = create_96_well_plate_layout()
+
+    # Get unique file names
+    unique_file_names = list(areas_df.file_name.unique())
+
+    # Take the name that has 24hr in it and does not have ND in it to filter the MIC_df with
+    experiment_plates_24hr = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" not in file_name]
+
+    # Take the name that has 48hr in it and does not have ND in it
+    experiment_plates_48hr = [file_name for file_name in unique_file_names if "48hr" in file_name and "ND" not in file_name]
+    # Take the name that has 48hr in it and has ND in it
+    control_plates_48hr_ND = [file_name for file_name in unique_file_names if "48hr" in file_name and "ND" in file_name]
+    
+
+    if plate_format == 1536:
+        # Find the pairs of plates as needed for the calculation of the MIC
+        for division in text_division_of_origin_96_well_plate:
+            experiment_plate_24hr = [plate for plate in experiment_plates_24hr if division in plate]
+            experiment_plate_48hr = [plate for plate in experiment_plates_48hr if division in plate]
+            control_plate_48hr_ND = [plate for plate in control_plates_48hr_ND if division in plate]
+
+            # If either are empty that means that the expriement was not done for less strains
+            if len(control_plate_48hr_ND) == 0 or len(experiment_plate_48hr) == 0 or len(experiment_plate_24hr) == 0:
+                continue
+            elif len(control_plate_48hr_ND) > 1 or len(experiment_plate_48hr) > 1 or len(experiment_plate_24hr) > 1:
+                raise ValueError(f'There are more than one plate for {division}')
+
+            experiment_plate_24hr = experiment_plate_24hr[0]
+            experiment_plate_48hr = experiment_plate_48hr[0]
+            control_plate_48hr_ND = control_plate_48hr_ND[0]
+            
+            for (origin_well_row, origin_well_column) in origin_wells:
+                # Get the indexes of the growth areas in the experiment plate
+                experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
+                
+                # Since a 1536 plate has 8 time the rows a 96 well plate, but the rows in the 1536
+                # are divided into groups of 4 in our case, we need to multiply the row index by 4
+                # to get the correct row index in the 1536 plate
+                exp_row = origin_well_row * 4
+
+                # Calculate the mean of the growth areas in the ND plate
+                ND_growth_areas = get_plate_growth_areas(areas_df, control_plate_48hr_ND, exp_row, experiment_well_indexes, plate_format)
+
+                ND_mean = ND_growth_areas['area'].mean()
+
+                
+                # FoG is defined as the precentage of growth at 48hr in drug over MIC divided by the precentage of growth at 48hr in ND
+                # Therefore, get the distance on the MIC for the strain from the MIC_df and divide the mean area of the colonies 
+                # closer to the drug strip (than the MIC) by the mean area of the ND
+                distance = int(MIC_df.loc[(MIC_df.file_name_24hr == experiment_plate_24hr) &
+                                        (MIC_df.row_index == origin_well_row) &
+                                        (MIC_df.column_index == origin_well_column), 'MIC'].values[0])
+                
+                # Distance is based 1 counting, so we need to subtract 1 to get the index from which to get the mean of the growth areas
+                # that are closer to the drug strip than the MIC
+                exp_growth_areas = get_plate_growth_areas(areas_df, experiment_plate_48hr, exp_row, experiment_well_indexes, plate_format)
+                exp_mean_growth_over_MIC = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1][distance - 1:].mean()
+
+                FoG = exp_mean_growth_over_MIC / ND_mean
+                
+                file_names.append(experiment_plate_48hr)
+                origin_row_indexes.append(origin_well_row)
+                origin_column_indexes.append(origin_well_column)
+                FoGs.append(FoG)
+
+        MIC_df = pd.DataFrame({'file_name_48hr': file_names,
+                                'row_index': origin_row_indexes,
+                                'column_index': origin_column_indexes,
+                                'FoG': FoGs})
+        return MIC_df
+
+          
     else:
         raise ValueError(f'Format {plate_format} is not supported')
 
