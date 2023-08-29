@@ -69,7 +69,7 @@ def main():
     if(is_generate_qc):
         generate_qc_images(organized_images, QC_dir)
 
-    # Get the areas in the experiment plate
+    # Get the areas in the experiment plates
     growth_areas = get_growth_areas(plate_format)
     
     calculated_areas = {}
