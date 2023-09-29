@@ -55,13 +55,16 @@ def main():
     end_col = picture_trim_info["end_col"]
 
     text_division_of_origin_96_well_plate = config["text_division_of_origin_96_well_plate"]
-    MIC_cutoff = config["MIC"]
+    # Distance of Inhibition cutoff
+    DI_cutoff = config["DI"]
     
     # Create the output directories
     output_dir_images = create_directory(input_path, f'ISO_PL_{plate_num}_preproccesed_images')
     QC_dir = create_directory(input_path, f'QC_ISO_PL_{plate_num}')
     # Create the output directories for the processed data
     output_dir_processed_data = create_directory(input_path, f'ISO_PL_{plate_num}_processed_data')
+
+    output_dir_graphs = create_directory(input_path, f'ISO_PL_{plate_num}_graphs')
 
     save_run_parameters(output_dir_processed_data, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold, is_generate_qc)
     
@@ -81,13 +84,13 @@ def main():
     raw_areas_df = organize_raw_data(calculated_areas, plate_format)
     raw_areas_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.xlsx'), index=False)
 
-    # Calculate the MIC for each strain
-    MIC_df = calculate_mic(raw_areas_df, plate_format, MIC_cutoff, text_division_of_origin_96_well_plate)
+    # Calculate the DI (Distance of Inhibition) for each strain
+    DI_df = calculate_DI(raw_areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate)
     
-    FoG_df = calculate_FoG(raw_areas_df, MIC_df, plate_format, text_division_of_origin_96_well_plate)
+    FoG_df = calculate_FoG(raw_areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate)
 
-    # Merge the MIC and FoG dataframes on row_index, column_index
-    processed_data_df = pd.merge(MIC_df, FoG_df, on=['row_index', 'column_index'])
+    # Merge the DI (Distance of Inhibition) and FoG dataframes on row_index, column_index
+    processed_data_df = pd.merge(DI_df, FoG_df, on=['row_index', 'column_index'])
 
     # Add the experiment conditions to the dataframe
     processed_data_df['media'] = media
@@ -95,8 +98,8 @@ def main():
     processed_data_df['drug'] = drug_name
     processed_data_df['plate_format'] = plate_format
 
-    # Set column order to file_name_24hr, file_name_48hr, row_index, column_index, MIC, FoG, media, temprature, drug, plate_format
-    processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'row_index', 'column_index', 'MIC', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
+    # Set column order to file_name_24hr, file_name_48hr, row_index, column_index, DI, FoG, media, temprature, drug, plate_format
+    processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'row_index', 'column_index', 'DI', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
 
     processed_data_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
 
@@ -451,11 +454,11 @@ def get_distance_from_strip(column_index, plate_format):
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def calculate_mic(areas_df, plate_format, MIC_cutoff, text_division_of_origin_96_well_plate):
+def calculate_DI(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate):
     '''
     Description
     -----------
-    Calculate the MIC for each strain
+    Calculate the DI (Distance of inhibition) for each strain
     
     Parameters
     ----------
@@ -463,8 +466,8 @@ def calculate_mic(areas_df, plate_format, MIC_cutoff, text_division_of_origin_96
         The dataframe containing the areas of the growth areas
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
-    MIC_cutoff : int
-        The cutoff for the MIC (usually 50% growth reduction)
+    DI_cutoff : int
+        The cutoff for the DI (usually 50% growth reduction)
     text_division_of_origin_96_well_plate : str
         The text division of the original plate layout that the images were generated from.
         Usually ['1-4', '5-8', '9-12']
@@ -478,15 +481,15 @@ def calculate_mic(areas_df, plate_format, MIC_cutoff, text_division_of_origin_96
             The row index of the well from which the growth area was taken
         origin_column_index : int
             The column index of the well from which the growth area was taken
-        MIC : float
-            The MIC of the strain in the well from which the growth area was taken
+        DI : float
+            The DI (Distance of Inhibition) of the strain in the well from which the growth area was taken
     '''
     
     # Create lists to later be used for creating the dataframe
     file_names = []
     origin_row_indexes = []
     origin_column_indexes = []
-    MICs = []
+    DIs = []
 
     # Make a list of the wells in the original 96 well plate
     origin_wells = create_96_well_plate_layout()
@@ -501,7 +504,7 @@ def calculate_mic(areas_df, plate_format, MIC_cutoff, text_division_of_origin_96
     
 
     if plate_format == 1536:
-        # Find the pairs of plates as needed for the calculation of the MIC
+        # Find the pairs of plates as needed for the calculation of the DI (Distance of Inhibition)
         for division in text_division_of_origin_96_well_plate:
             experiment_plate_24hr = [plate for plate in experiment_plates_24hr if division in plate]
             control_plate_24hr_ND = [plate for plate in control_plates_24hr_ND if division in plate]
@@ -528,30 +531,30 @@ def calculate_mic(areas_df, plate_format, MIC_cutoff, text_division_of_origin_96
 
                 ND_mean = ND_mean_df_rows.area.mean()
 
-                # Find the MIC by finding the first growth area that has a mean of less than ND_mean * MIC_cutoff
+                # Find the DI (Distance of Inhibition) by finding the first growth area that has a mean of less than ND_mean * DI_cutoff
                 exp_growth_areas = get_plate_growth_areas(areas_df, experiment_plate_24hr, exp_row, experiment_well_indexes, plate_format)
                 
                 exp_mean_growth_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values
 
-                # Find the first growth area that has a mean of less than ND_mean * MIC_cutoff
-                MIC_distance = -1
+                # Find the first growth area that has a mean of less than ND_mean * DI_cutoff
+                DI_distance_from_strip = -1
                 for i, growth_area in enumerate(exp_mean_growth_by_distance_from_strip[::-1]):
-                    if growth_area < ND_mean * MIC_cutoff:
-                        MIC_distance = len(exp_mean_growth_by_distance_from_strip) - i
+                    if growth_area < ND_mean * DI_cutoff:
+                        DI_distance_from_strip = len(exp_mean_growth_by_distance_from_strip) - i
                         break
                 
-                # Add the file name, origin row and column indexes, and the MIC
+                # Add the file name, origin row and column indexes, and the DI
                 file_names.append(experiment_plate_24hr)
                 origin_row_indexes.append(origin_well_row)
                 origin_column_indexes.append(origin_well_column)
-                MICs.append(MIC_distance)
+                DIs.append(DI_distance_from_strip)
 
         # Create the dataframe
-        MIC_df = pd.DataFrame({'file_name_24hr': file_names,
+        DI_df = pd.DataFrame({'file_name_24hr': file_names,
                                 'row_index': origin_row_indexes,
                                 'column_index': origin_column_indexes,
-                                'MIC': MICs})
-        return MIC_df
+                                'DI': DIs})
+        return DI_df
 
           
     else:
@@ -637,7 +640,7 @@ def get_plate_growth_areas(areas_df, plate_name, experiment_begin_row, experimen
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def calculate_FoG(areas_df, MIC_df, plate_format, text_division_of_origin_96_well_plate):
+def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate):
     '''
     Description
     -----------
@@ -647,8 +650,8 @@ def calculate_FoG(areas_df, MIC_df, plate_format, text_division_of_origin_96_wel
     ----------
     areas_df : pandas dataframe
         The dataframe containing the areas of the growth areas
-    MIC_df : pandas dataframe
-        The dataframe containing the MIC values of the strains
+    DI_df : pandas dataframe
+        The dataframe containing the DI (Distances of Inhibition) values of the strains
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
     The text division of the original plate layout that the images were generated from.
@@ -680,7 +683,7 @@ def calculate_FoG(areas_df, MIC_df, plate_format, text_division_of_origin_96_wel
     # Get unique file names
     unique_file_names = list(areas_df.file_name.unique())
 
-    # Take the name that has 24hr in it and does not have ND in it to filter the MIC_df with
+    # Take the name that has 24hr in it and does not have ND in it to filter the DI_df with
     experiment_plates_24hr = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" not in file_name]
 
     # Take the name that has 48hr in it and does not have ND in it
@@ -690,7 +693,7 @@ def calculate_FoG(areas_df, MIC_df, plate_format, text_division_of_origin_96_wel
     
 
     if plate_format == 1536:
-        # Find the pairs of plates as needed for the calculation of the MIC
+        # Find the pairs of plates as needed for the calculation of the DI
         for division in text_division_of_origin_96_well_plate:
             experiment_plate_24hr = [plate for plate in experiment_plates_24hr if division in plate]
             experiment_plate_48hr = [plate for plate in experiment_plates_48hr if division in plate]
@@ -721,35 +724,37 @@ def calculate_FoG(areas_df, MIC_df, plate_format, text_division_of_origin_96_wel
                 ND_mean = ND_growth_areas['area'].mean()
 
                 
-                # FoG is defined as the precentage of growth at 48hr in drug over MIC divided by the precentage of growth at 48hr in ND
-                # Therefore, get the distance on the MIC for the strain from the MIC_df and divide the mean area of the colonies 
-                # closer to the drug strip (than the MIC) by the mean area of the ND
-                distance = int(MIC_df.loc[(MIC_df.file_name_24hr == experiment_plate_24hr) &
-                                        (MIC_df.row_index == origin_well_row) &
-                                        (MIC_df.column_index == origin_well_column), 'MIC'].values[0])
+                # FoG is defined as the precentage of growth at 48hr in drug over DI divided by the precentage of growth at 48hr in ND
+                # Therefore, get the distance on the DI for the strain from the DI_df and divide the mean area of the colonies 
+                # closer to the drug strip (than the DI) by the mean area of the ND
+                distance = int(DI_df.loc[(DI_df.file_name_24hr == experiment_plate_24hr) &
+                                        (DI_df.row_index == origin_well_row) &
+                                        (DI_df.column_index == origin_well_column), 'DI'].values[0])
                 
                 # Distance is based 1 counting, so we need to subtract 1 to get the index from which to get the mean of the growth areas
-                # that are closer to the drug strip than the MIC
+                # that are closer to the drug strip than the DI
                 exp_growth_areas = get_plate_growth_areas(areas_df, experiment_plate_48hr, exp_row, experiment_well_indexes, plate_format)
-                exp_mean_growth_over_MIC = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1][distance - 1:].mean()
+                exp_mean_growth_over_DI = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1][distance - 1:].mean()
 
-                FoG = exp_mean_growth_over_MIC / ND_mean
+                FoG = exp_mean_growth_over_DI / ND_mean
                 
                 file_names.append(experiment_plate_48hr)
                 origin_row_indexes.append(origin_well_row)
                 origin_column_indexes.append(origin_well_column)
                 FoGs.append(FoG)
 
-        MIC_df = pd.DataFrame({'file_name_48hr': file_names,
+        DI_df = pd.DataFrame({'file_name_48hr': file_names,
                                 'row_index': origin_row_indexes,
                                 'column_index': origin_column_indexes,
                                 'FoG': FoGs})
-        return MIC_df
+        return DI_df
 
           
     else:
         raise ValueError(f'Format {plate_format} is not supported')
 
+
+#def create_FoG_and_
 
 if __name__ == "__main__":
     main()
