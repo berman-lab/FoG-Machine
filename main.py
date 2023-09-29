@@ -17,7 +17,6 @@ def main():
     parser.add_argument('-n', '--number', help='The plate number', default=1)
     parser.add_argument('-d', '--drug', help='The drug name', required=True)
     parser.add_argument('-f', '--format', help='The layout of colonies of the plate (384, 1536)', required=True)
-    parser.add_argument('-ct', '--colony_threshold', help='The threshold for the colony detection as the intesity of the grayscale pixel. (0,255)', required=True)
     parser.add_argument('-qc', help='generate QC pictures', action='store_true')
     
     args = parser.parse_args()
@@ -28,7 +27,6 @@ def main():
     plate_num = int(args.number)
     drug_name = args.drug
     plate_format = int(args.format)
-    colony_threshold = int(args.colony_threshold)
     is_generate_qc = args.qc
     input_images = get_files_from_directory(input_path , '.png')
     organized_images = {}
@@ -57,6 +55,7 @@ def main():
     text_division_of_origin_96_well_plate = config["text_division_of_origin_96_well_plate"]
     # Distance of Inhibition cutoff
     DI_cutoff = config["DI"]
+    colony_threshold = config["CT"]
     
     # Create the output directories
     output_dir_images = create_directory(input_path, f'ISO_PL_{plate_num}_preproccesed_images')
