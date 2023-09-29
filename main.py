@@ -11,33 +11,37 @@ def main():
     # Set up the argument parser
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--path', help='The path to the pictures directory', required=True)
+    parser.add_argument('-pn', '--prefix_name', help='A prefix to add to the name of the output files', default="")
+    parser.add_argument('-m', '--media', help='The growth nedia on which the experiment was done', required=True)
+    parser.add_argument('-t', '--temperature', help='The incubation temperature in celsius', required=True)
     parser.add_argument('-n', '--number', help='The plate number', default=1)
     parser.add_argument('-d', '--drug', help='The drug name', required=True)
     parser.add_argument('-f', '--format', help='The layout of colonies of the plate (384, 1536)', required=True)
     parser.add_argument('-ct', '--colony_threshold', help='The threshold for the colony detection as the intesity of the grayscale pixel. (0,255)', required=True)
-    parser.add_argument('-o', '--is_order_only', help='Only order the pictures', action='store_true')
     parser.add_argument('-qc', help='generate QC pictures', action='store_true')
     
     args = parser.parse_args()
-    path = os.path.normcase(args.path)
+    input_path = os.path.normcase(args.path)
+    prefix_name = args.prefix_name
+    media = args.media
+    temprature = args.temperature
     plate_num = int(args.number)
     drug_name = args.drug
     plate_format = int(args.format)
     colony_threshold = int(args.colony_threshold)
-    is_order_only = args.is_order_only
     is_generate_qc = args.qc
-    input_images = get_files_from_directory(path , '.png')
+    input_images = get_files_from_directory(input_path , '.png')
     organized_images = {}
 
-    config = ""
+    config = ''
     with open('config.json') as json_file:
         config = json.load(json_file)
     
-    colonies_location = config[f"colony_spacing_and_locations_{plate_format}"]
+    colonies_location = config[f'colony_spacing_and_locations_{plate_format}']
     global start_x
-    start_x = colonies_location["start_x"]
+    start_x = colonies_location['start_x']
     global start_y
-    start_y = colonies_location["start_y"]
+    start_y = colonies_location['start_y']
     global step_x
     step_x = colonies_location["step_x"]
     global step_y
@@ -54,17 +58,14 @@ def main():
     MIC_cutoff = config["MIC"]
     
     # Create the output directories
-    output_dir_images = create_directory(path, f'ISO_PL_{plate_num}_preproccesed_images')
-    QC_dir = create_directory(path, f'QC_ISO_PL_{plate_num}')
+    output_dir_images = create_directory(input_path, f'ISO_PL_{plate_num}_preproccesed_images')
+    QC_dir = create_directory(input_path, f'QC_ISO_PL_{plate_num}')
     # Create the output directories for the processed data
-    output_dir_processed_data = create_directory(path, f'ISO_PL_{plate_num}_processed_data')
+    output_dir_processed_data = create_directory(input_path, f'ISO_PL_{plate_num}_processed_data')
 
+    save_run_parameters(output_dir_processed_data, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold, is_generate_qc)
     
-    organized_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, plate_num, drug_name, colony_threshold, output_dir_images)
-
-    # If the user has chosen to only trim and transform the pictures, return
-    if is_order_only:
-        return
+    organized_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name, colony_threshold, plate_format, output_dir_images)
 
     if(is_generate_qc):
         generate_qc_images(organized_images, QC_dir)
@@ -87,6 +88,16 @@ def main():
 
     # Merge the MIC and FoG dataframes on row_index, column_index
     processed_data_df = pd.merge(MIC_df, FoG_df, on=['row_index', 'column_index'])
+
+    # Add the experiment conditions to the dataframe
+    processed_data_df['media'] = media
+    processed_data_df['temprature'] = temprature
+    processed_data_df['drug'] = drug_name
+    processed_data_df['plate_format'] = plate_format
+
+    # Set column order to file_name_24hr, file_name_48hr, row_index, column_index, MIC, FoG, media, temprature, drug, plate_format
+    processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'row_index', 'column_index', 'MIC', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
+
     processed_data_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
 
 
@@ -120,7 +131,20 @@ def create_directory(parent_directory, nested_directory_name):
     return new_dir_path
 
 
-def preprocess_images(input_images, start_row, end_row, start_col, end_col, plate_num, drug_name ,colony_threshold, output_path):
+def save_run_parameters(output_dir_processed_data, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold, is_generate_qc):
+    with open(os.path.join(output_dir_processed_data, f'{prefix_name}_{plate_num}_run_parameters.txt'), 'w') as f:
+        f.write(f'path: {input_path}\n')
+        f.write(f'prefix_name: {prefix_name}\n')
+        f.write(f'media: {media}\n')
+        f.write(f'temprature: {temprature}\n')
+        f.write(f'plate_num: {plate_num}\n')
+        f.write(f'drug_name: {drug_name}\n')
+        f.write(f'plate_format: {plate_format}\n')
+        f.write(f'colony_threshold: {colony_threshold}\n')
+        f.write(f'is_generate_qc: {is_generate_qc}\n')
+
+
+def preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name ,colony_threshold, plate_format, output_path):
     '''
     Description
     -----------
@@ -138,12 +162,20 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, plat
         The column index of the top left corner of the area to be cropped
     end_col : int
         The column index of the bottom right corner of the area to be cropped
+    prefix_name : str
+        A prefix to add to the name of the output files
+    media : str
+        The growth media used in the experiment
+    temprature : int
+        The incubation temprature in celsius
     plate_num : int
         The number of the plate from which the images were taken
     drug_name : str
         The name of the drug used in the experiment
     colony_threshold : int
         The threshold used for determining if a pixel is part of a colony or not
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
     output_path : str
         The path to the directory in which the preprocessed images will be saved
 
@@ -159,6 +191,18 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, plat
         picture_name = pathlib.Path(picture).stem.lower()
 
         image = cv2.imread(picture)
+
+        # Make sure the image aspect ratio is 4:3 (width:height)
+        if image.shape[0] / image.shape[1] != 3/4:
+            err_str = f"image {picture_name} is not of aspect ratio 4:3 (width:height)"
+            print(err_str)
+            return ValueError(err_str)
+        
+
+        # Development was done given an image of size 4128x3096
+        # Therefore the inputed image needs to be resized to that size
+        image = cv2.resize(image, (4128, 3096))
+
         # Crop the image
         # start_row:end_row, start_col:end_col
         cropped_image = image[start_row:end_row, start_col:end_col]
@@ -184,10 +228,13 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, plat
             print(f"file {picture_name} does not contain the time in the name")
             return ValueError('The time is not specified in the picture name in a supported format. HOURS or hr should be in the name')
 
+        current_image_name = f'{prefix_name}_{plate_num}_{plate_format}_{media}_{temprature}_{drug_name}_{time}_{numbers[0]}-{numbers[-1]}'
+        
+        # If the plate has no drug, add ND to the name
         if len(picture_name.split('nd')) > 1:
-            current_image_name = f'ISO_PL_{plate_num}_{drug_name}_{time}_{numbers[0]}-{numbers[-1]}_ND'
-        else:
-            current_image_name = f'ISO_PL_{plate_num}_{drug_name}_{time}_{numbers[0]}-{numbers[-1]}'
+            current_image_name += "_ND"
+        
+            
 
         cropped_image = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2GRAY)
         mask = cropped_image > colony_threshold
