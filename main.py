@@ -737,6 +737,18 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
                                         (DI_df.row_index == origin_well_row) &
                                         (DI_df.column_index == origin_well_column), 'DI'].values[0])
                 
+
+                # if we get a distance of -1 that means that there was no distance at which a reduction of DI_cutoff was reached
+                # therefore we skip this well and set FoG to -1 to mark that it was skipped and to ignored later
+                if distance == -1:
+                    FoG = -1
+                    file_names.append(experiment_plate_48hr)
+                    origin_row_indexes.append(origin_well_row)
+                    origin_column_indexes.append(origin_well_column)
+                    FoGs.append(FoG)
+                    continue
+
+
                 # Distance is based 1 counting, so we need to subtract 1 to get the index from which to get the mean of the growth areas
                 # that are closer to the drug strip than the DI
                 exp_growth_areas = get_plate_growth_areas(areas_df, experiment_plate_48hr, exp_row, experiment_well_indexes, plate_format)
@@ -789,7 +801,7 @@ def create_hist(data, ax, title, xlabel, linewidth=2):
     ax.xaxis.set_ticks_position('bottom')
 
     ax.set_title(title)    
-    ax.hist(data, bins=12, linewidth = linewidth, histtype='step')
+    ax.hist(data, bins=10, linewidth = linewidth, histtype='step')
     ax.set_ylabel('Count')
     ax.set_xlabel(xlabel)
 
@@ -817,6 +829,9 @@ def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, plate_nu
     -------
     None    
     '''
+    # Filter out the rows that have FoG of -1
+    processed_data_df = processed_data_df.loc[processed_data_df.FoG != -1, :]
+    
     fig, ax = plt.subplots(2, 1, figsize=(10, 10))
     
     # Create the FoG histogram
