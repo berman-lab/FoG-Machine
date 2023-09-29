@@ -6,8 +6,14 @@ import argparse
 import itertools
 import numpy as np
 import pandas as pd
+import scienceplots
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 def main():
+    styles = ['science', 'notebook', 'grid']
+    plt.style.use(styles)
+
     # Set up the argument parser
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--path', help='The path to the pictures directory', required=True)
@@ -102,6 +108,7 @@ def main():
 
     processed_data_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
 
+    create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, prefix_name, plate_num, DI_cutoff)
 
 def get_files_from_directory(path , extension):
     '''Get the full path to each file with the extension specified from the path'''
@@ -753,7 +760,74 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-#def create_FoG_and_
+def create_hist(data, ax, title, xlabel, linewidth=2):
+    '''
+    Description
+    -----------
+    Create a histogram of the data
+
+    Parameters
+    ----------
+    data : array like
+        The data to plot the histogram of
+    ax : matplotlib axes object
+        The axes on which to plot the histogram
+    title : str
+        The title of the histogram
+    xlabel : str
+        The label of the x axis
+    linewidth : int
+        The width of the line of the histogram    
+    
+    Returns
+    -------
+    None
+    '''
+    # Remove ticks from Y axis
+    ax.yaxis.set_ticks_position('none')
+    # Remove ticks from X axis top
+    ax.xaxis.set_ticks_position('bottom')
+
+    ax.set_title(title)    
+    ax.hist(data, bins=12, linewidth = linewidth, histtype='step')
+    ax.set_ylabel('Count')
+    ax.set_xlabel(xlabel)
+
+
+def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, plate_num, DI_cutoff):
+    '''
+    Description
+    -----------
+    Create histograms of the FoG and DI values and save them in the graphs data directory
+    
+    Parameters
+    ----------
+    processed_data_df : pandas dataframe
+        The dataframe with the FoG and DI values
+    graphs_dir : str
+        The path to the directory in which the graphs will be saved
+    prefix_name : str
+        The prefix name of the experiment
+    plate_num : int
+        The number of the plate from which the images were taken
+    DI_cutoff : float
+        The cutoff for the DI (usually 0.5 growth reduction)
+
+    Returns
+    -------
+    None    
+    '''
+    fig, ax = plt.subplots(2, 1, figsize=(10, 10))
+    
+    # Create the FoG histogram
+    create_hist(processed_data_df.FoG, ax[0], f'FoG distrobution for {prefix_name} {plate_num}', 'FoG')
+
+    # Create the DI histogram
+    DI_cutoff_text = f'DI {DI_cutoff * 100:.2f}%'
+    create_hist(processed_data_df.DI, ax[1], f'Distance of inhibition (DI) distrobution for {prefix_name} {plate_num}', DI_cutoff_text)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(graphs_dir, f'{prefix_name}_{plate_num}_FoG_and_{DI_cutoff_text.replace(" " , "_")}_hist.png'), dpi=500)
 
 if __name__ == "__main__":
     main()
