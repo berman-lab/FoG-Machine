@@ -81,7 +81,7 @@ def main():
     organized_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name, colony_threshold, plate_format, output_dir_images)
 
     # Get the areas in the experiment plates
-    growth_area_coordinates = get_growth_areas(plate_format)
+    growth_area_coordinates = get_growth_areas_coordinates(plate_format)
 
 
     if(is_generate_qc):
@@ -213,7 +213,7 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         image = cv2.imread(picture)
 
         # Make sure the image aspect ratio is 4:3 (width:height)
-        if image.shape[0] / image.shape[1] != 3/4:
+        if image.shape[1] / image.shape[0] != 4/3:
             err_str = f"image {picture_name} is not of aspect ratio 4:3 (width:height)"
             print(err_str)
             return ValueError(err_str)
@@ -222,7 +222,7 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         # Development was done given an image of size 4128x3096
         # Therefore the inputed image needs to be resized to that size
         if image.shape != (3096, 4128, 3):
-            image = cv2.resize(image, (3096, 4128, 3))
+            image = cv2.resize(image, (4128, 3096))
 
         # Crop the image
         # start_row:end_row, start_col:end_col
@@ -309,7 +309,7 @@ def generate_qc_images(organized_images, growth_area_coordinates, output_path):
     return True 
 
 
-def get_growth_areas(plate_format):
+def get_growth_areas_coordinates(plate_format):
     '''
     Description
     -----------
@@ -757,7 +757,7 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
                 ND_mean_48hr = ND_growth_area_sizes['area'].mean()
 
                 
-                # FoG is defined as the precentage of growth at 48hr in drug over DI divided by the precentage of growth at 48hr in ND
+                # FoG is defined as the average growth at 48hr in drug over DI divided by the average of growth at 48hr in ND
                 # Therefore, get the distance on the DI for the strain from the DI_df and divide the mean area of the colonies 
                 # closer to the drug strip (than the DI) by the mean area of the ND
 
@@ -777,12 +777,12 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
                     FoGs.append(FoG)
                     continue
 
-
+                
                 # Distance is based 1 counting, so we need to subtract 1 to get the index from which to get the mean of the growth areas
                 # that are closer to the drug strip than the DI
                 exp_growth_areas = get_plate_growth_area_sizes(areas_df, experiment_plate_48hr, exp_row, experiment_well_indexes, plate_format)
                 exp_mean_growth_over_DI = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1][strain_DI - 1:].mean()
-
+                
                 FoG = exp_mean_growth_over_DI / ND_mean_48hr
                 
                 file_names.append(experiment_plate_48hr)
