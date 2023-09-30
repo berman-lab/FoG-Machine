@@ -18,22 +18,27 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--path', help='The path to the pictures directory', required=True)
     parser.add_argument('-pn', '--prefix_name', help='A prefix to add to the name of the output files', default="")
+    parser.add_argument('-n', '--number', help='The plate number', default=1)
+    parser.add_argument('-f', '--format', help='The layout of colonies of the plate (384, 1536)', required=True)
+
     parser.add_argument('-m', '--media', help='The growth nedia on which the experiment was done', required=True)
     parser.add_argument('-t', '--temperature', help='The incubation temperature in celsius', required=True)
-    parser.add_argument('-n', '--number', help='The plate number', default=1)
     parser.add_argument('-d', '--drug', help='The drug name', required=True)
-    parser.add_argument('-f', '--format', help='The layout of colonies of the plate (384, 1536)', required=True)
+
     parser.add_argument('-qc', help='generate QC pictures', action='store_true')
     
     args = parser.parse_args()
     input_path = os.path.normcase(args.path)
     prefix_name = args.prefix_name
+    plate_num = int(args.number)
+    plate_format = int(args.format)
+
     media = args.media
     temprature = args.temperature
-    plate_num = int(args.number)
     drug_name = args.drug
-    plate_format = int(args.format)
+    
     is_generate_qc = args.qc
+
     input_images = get_files_from_directory(input_path , '.png')
     organized_images = {}
 
@@ -71,19 +76,25 @@ def main():
 
     output_dir_graphs = create_directory(input_path, f'ISO_PL_{plate_num}_graphs')
 
-    save_run_parameters(output_dir_processed_data, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold, is_generate_qc)
+    save_run_parameters(QC_dir, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold, is_generate_qc)
     
     organized_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name, colony_threshold, plate_format, output_dir_images)
 
-    if(is_generate_qc):
-        generate_qc_images(organized_images, QC_dir)
-
     # Get the areas in the experiment plates
-    growth_areas = get_growth_areas(plate_format)
-    
+    growth_area_coordinates = get_growth_areas(plate_format)
+
+
+    if(is_generate_qc):
+        generate_qc_images(organized_images, growth_area_coordinates, QC_dir)
+
+
+    # Save growth areas in excel file
+    growth_areas_df = pd.DataFrame(growth_area_coordinates.reshape(-1, 1), columns=['growth_areas'])
+    growth_areas_df.to_excel(os.path.join(QC_dir, f'ISO_PL_{plate_num}_growth_areas.xlsx'), index=False)
+
     calculated_areas = {}
     for image_name, image in organized_images.items():
-        image_areas = calculate_growth_area(image_name ,image, growth_areas)
+        image_areas = calculate_growth_in_areas(image_name ,image, growth_area_coordinates)
         calculated_areas[image_name] = image_areas[image_name]
 
     raw_areas_df = organize_raw_data(calculated_areas, plate_format)
@@ -210,7 +221,8 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
 
         # Development was done given an image of size 4128x3096
         # Therefore the inputed image needs to be resized to that size
-        image = cv2.resize(image, (4128, 3096))
+        if image.shape != (3096, 4128, 3):
+            image = cv2.resize(image, (3096, 4128, 3))
 
         # Crop the image
         # start_row:end_row, start_col:end_col
@@ -243,8 +255,6 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         if len(picture_name.split('nd')) > 1:
             current_image_name += "_ND"
         
-            
-
         cropped_image = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2GRAY)
         mask = cropped_image > colony_threshold
         cropped_image[mask] = 255
@@ -255,15 +265,18 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
     return organized_images
 
 
-def generate_qc_images(organized_images, output_path):
+def generate_qc_images(organized_images, growth_area_coordinates, output_path):
     '''
     Description
     -----------
-    
+    Draw squares around the growth areas in the images for visualizing the areas in which the calculations are done
+
     Parameters
     ----------
     organized_images : dict
         A dictionary containing the images after preprocessing under the name of the image without the extension
+    growth_area_coordinates : numpy array
+        Contains the coordinates of the growth areas in the images
     output_path : str
         The path to the directory in which the preprocessed images will be saved
     
@@ -275,16 +288,20 @@ def generate_qc_images(organized_images, output_path):
 
     # Overlay a grid on the images for visualizing the areas in which the calculations are done
     for image_name ,image in organized_images.items():
-        height, width = image.shape
-        grid_color = 255
 
-        # Draw vertical grid lines
-        for i in range(0, 49):
-            cv2.line(image, (start_x + round(i * step_x), 0), (start_x + round(i * step_x), height), grid_color, 1)
+        # Copy the image to avoid modifying the original image
+        image = image.copy()
 
-        # Draw horizontal grid lines
-        for i in range(0, 33):
-            cv2.line(image, (0, start_y + round(i * step_y)), (width, start_y + round(i * step_y)), grid_color, 1)
+        
+        border_color = (255, 255, 255)
+        border_thickness = 2
+
+        # Draw the borders of the growth areas
+        for coordintes_row in growth_area_coordinates:
+            for coordinte in coordintes_row:
+                start_point = (coordinte["start_x"], coordinte["start_y"])
+                end_point = (coordinte["end_x"], coordinte["end_y"])
+                image = cv2.rectangle(image, start_point, end_point, border_color, border_thickness)
 
         # Save the result image
         cv2.imwrite(f'{output_path}/{image_name}.png', image)
@@ -341,7 +358,7 @@ def get_growth_areas(plate_format):
     return areas
 
 
-def calculate_growth_area(image_name, image, growth_areas):
+def calculate_growth_in_areas(image_name, image, growth_areas):
     '''
     Description
     -----------
@@ -360,11 +377,21 @@ def calculate_growth_area(image_name, image, growth_areas):
     ----------
     key value pair of the image name and a dictionary with the growth areas as keys and the growth area as values
     '''
-    areas = {}
-    for row_index, area in enumerate(growth_areas):
-        for column_index, area in enumerate(growth_areas[row_index]):
-            areas[row_index, column_index] = np.count_nonzero(image[area["start_y"] : area["end_y"], area["start_x"] : area["end_x"]] == 255)
-    return {image_name : areas}
+
+    area_sizes = {}
+    for row_index in range(0, len(growth_areas)):
+        for column_index, growth_area_coordinates_item in enumerate(growth_areas[row_index]):
+            start_x = growth_area_coordinates_item["start_x"]
+            end_x = growth_area_coordinates_item["end_x"]
+            start_y = growth_area_coordinates_item["start_y"]
+            end_y = growth_area_coordinates_item["end_y"]
+
+            growth_area_pixels = image[start_y : end_y, start_x : end_x]
+            # There are only 0 or 255 as values in the image, therefore nonzero count will be the number of pixels with value 255
+            # and that is the area of the growth area as set by the threshold earlier
+            area_sizes[row_index, column_index] = np.count_nonzero(growth_area_pixels)
+
+    return {image_name : area_sizes}
 
 
 def organize_raw_data(calculated_areas, plate_format):
@@ -519,7 +546,7 @@ def calculate_DI(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_w
             if len(control_plate_24hr_ND) == 0 or len(experiment_plate_24hr) == 0:
                 continue
             elif len(control_plate_24hr_ND) > 1 or len(experiment_plate_24hr) > 1:
-                raise ValueError(f'There are more than one plate for {division}')
+                raise ValueError(f'There is more than one plate for {division}')
 
             control_plate_24hr_ND = control_plate_24hr_ND[0]
             experiment_plate_24hr = experiment_plate_24hr[0]
@@ -529,16 +556,16 @@ def calculate_DI(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_w
                 experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
                 
                 # Since a 1536 plate has 8 time the rows a 96 well plate, but the rows in the 1536
-                # are divided into groups of 4 in our case, we need to multiply the row index by 4
-                # to get the correct row index in the 1536 plate
+                # are divided into groups of 4 in our case, we need to multiply the row index by 4 to get the correct row index in the 1536 plate.
+                # This allows to filter the dataframe by the correct starting row index
+                # and end row is handeled by the function call ahead using the format of the plate
                 exp_row = origin_well_row * 4
 
-                ND_mean_df_rows = get_plate_growth_areas(areas_df, control_plate_24hr_ND, exp_row, experiment_well_indexes, plate_format)
-
-                ND_mean = ND_mean_df_rows.area.mean()
+                ND_df_rows = get_plate_growth_area_sizes(areas_df, control_plate_24hr_ND, exp_row, experiment_well_indexes, plate_format)
+                ND_mean = ND_df_rows.area.mean()
 
                 # Find the DI (Distance of Inhibition) by finding the first growth area that has a mean of less than ND_mean * DI_cutoff
-                exp_growth_areas = get_plate_growth_areas(areas_df, experiment_plate_24hr, exp_row, experiment_well_indexes, plate_format)
+                exp_growth_areas = get_plate_growth_area_sizes(areas_df, experiment_plate_24hr, exp_row, experiment_well_indexes, plate_format)
                 
                 exp_mean_growth_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values
 
@@ -597,13 +624,13 @@ def convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_w
         # Based on the column index of the original plate map to the column index of the experiment plate
         # Since everythin is indexed on base 0 the column indexes are reduced by 1
         if origin_well_column in [0,4,8]:
-            column_indexes = list(range(1,12))
+            column_indexes = list(range(2,12))
         elif origin_well_column in [1,5,9]:
-            column_indexes = list(range(12,23))
+            column_indexes = list(range(12,22))
         elif origin_well_column in [2,6,10]:
-            column_indexes = list(range(25,36))
+            column_indexes = list(range(26,36))
         elif origin_well_column in [3,7,11]:
-            column_indexes = list(range(36,47))
+            column_indexes = list(range(36,46))
 
         # All the growth areas that originated from the same well in the original well
         # are given by the product of the row and column indexes as done here
@@ -613,11 +640,11 @@ def convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_w
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def get_plate_growth_areas(areas_df, plate_name, experiment_begin_row, experiment_well_indexes, plate_format):
+def get_plate_growth_area_sizes(areas_df, plate_name, experiment_begin_row, experiment_well_indexes, plate_format):
     '''
     Description
     -----------
-    Get the growth areas from the plate that was used in the experiment
+    Get the growth area sizes from the plate that was used in the experiment
 
     Parameters
     ----------
@@ -725,22 +752,24 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
                 exp_row = origin_well_row * 4
 
                 # Calculate the mean of the growth areas in the ND plate
-                ND_growth_areas = get_plate_growth_areas(areas_df, control_plate_48hr_ND, exp_row, experiment_well_indexes, plate_format)
+                ND_growth_area_sizes = get_plate_growth_area_sizes(areas_df, control_plate_48hr_ND, exp_row, experiment_well_indexes, plate_format)
 
-                ND_mean = ND_growth_areas['area'].mean()
+                ND_mean_48hr = ND_growth_area_sizes['area'].mean()
 
                 
                 # FoG is defined as the precentage of growth at 48hr in drug over DI divided by the precentage of growth at 48hr in ND
                 # Therefore, get the distance on the DI for the strain from the DI_df and divide the mean area of the colonies 
                 # closer to the drug strip (than the DI) by the mean area of the ND
-                distance = int(DI_df.loc[(DI_df.file_name_24hr == experiment_plate_24hr) &
+
+                # Get the specific DI for the strain to filter the relevant growth areas later
+                strain_DI = int(DI_df.loc[(DI_df.file_name_24hr == experiment_plate_24hr) &
                                         (DI_df.row_index == origin_well_row) &
                                         (DI_df.column_index == origin_well_column), 'DI'].values[0])
                 
 
                 # if we get a distance of -1 that means that there was no distance at which a reduction of DI_cutoff was reached
-                # therefore we skip this well and set FoG to -1 to mark that it was skipped and to ignored later
-                if distance == -1:
+                # therefore we skip this well and set FoG to -1 to mark that it was skipped and to be ignored later
+                if strain_DI == -1:
                     FoG = -1
                     file_names.append(experiment_plate_48hr)
                     origin_row_indexes.append(origin_well_row)
@@ -751,10 +780,10 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
 
                 # Distance is based 1 counting, so we need to subtract 1 to get the index from which to get the mean of the growth areas
                 # that are closer to the drug strip than the DI
-                exp_growth_areas = get_plate_growth_areas(areas_df, experiment_plate_48hr, exp_row, experiment_well_indexes, plate_format)
-                exp_mean_growth_over_DI = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1][distance - 1:].mean()
+                exp_growth_areas = get_plate_growth_area_sizes(areas_df, experiment_plate_48hr, exp_row, experiment_well_indexes, plate_format)
+                exp_mean_growth_over_DI = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1][strain_DI - 1:].mean()
 
-                FoG = exp_mean_growth_over_DI / ND_mean
+                FoG = exp_mean_growth_over_DI / ND_mean_48hr
                 
                 file_names.append(experiment_plate_48hr)
                 origin_row_indexes.append(origin_well_row)
