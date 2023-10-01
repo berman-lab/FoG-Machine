@@ -331,12 +331,18 @@ def get_growth_areas_coordinates(plate_format):
     The areas are ordered from top to bottom then left to right
     and therefore correspond to the order of growth areas in the plate
     '''
-    areas = np.empty((32, 48), dtype=object)
+    areas = np.empty((32, 40), dtype=object)
 
     if plate_format == 1536:
         # A 1536 well plate has 32 rows and 48 columns and therefore generate 1536 areas
         # first itarate over the rows
         for row_index in range(32):
+
+            # Since we skip the rows in which the strip is located, we need to map the row index to the correct row index in the plate
+            # for that we define the logical indexes of the columns to keep track where we should add the current growth area
+            # it has to be sperated from the actual column index so we can still make progress in the loop despite subtracting 1 from the column index
+            logical_column_indexes = 0
+
             # then iterate over the columns producing the areas in the order of 
             # left to right and top to bottom as required
             for column_index in range(48):
@@ -351,12 +357,14 @@ def get_growth_areas_coordinates(plate_format):
                 curr_area_start_y = start_y + round(row_index * step_y)
                 curr_area_end_y = (start_y + round((row_index + 1) * step_y))
                 
-                areas[row_index, column_index] = {
+                areas[row_index, logical_column_indexes] = {
                     "start_x" : curr_area_start_x,
                     "end_x" : curr_area_end_x,
                     "start_y" : curr_area_start_y,
                     "end_y" : curr_area_end_y
                     }
+                
+                logical_column_indexes += 1
     else:
         raise ValueError(f'Format {plate_format} is not supported')
     
