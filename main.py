@@ -436,10 +436,7 @@ def organize_raw_data(calculated_areas, plate_format):
     for image_name in calculated_areas:
         for (row_index, column_index), area in calculated_areas[image_name].items():
             curr_distance_from_strip = get_distance_from_strip(column_index, plate_format)
-            # If the current growth area is the strip itself, skip it
-            if curr_distance_from_strip == -1:
-                continue
-
+            
             distances_from_strip.append(curr_distance_from_strip)
             areas.append(area)
             file_names.append(image_name)
@@ -469,27 +466,35 @@ def get_distance_from_strip(column_index, plate_format):
         The distance of the growth area from the strip
     '''
     if plate_format == 1536:
-        # The strip itself is at columns: 0, 1, 22, 23, 24, 25, 46, 47
+        # 0 to 9 (physicaly 2 to 11) are the colonies that are near the leftmost strip and they are going away from it,
+        # therefore the distance from the strip is the same as the column_index + 1
+        # 0 needs to mapped to 1 and 9 to 10
+        if column_index in range(0, 10):
+            return column_index + 1
+        # 9 to 19 (physicaly 12 to 21) are the colonies that are to the left of the middle strip and they are going away from it,
+        # therefore the distance from the strip is the max index (19) minus the column_index
+        # 10 needs to be mapped to 10 and 19 to 1
+        elif column_index in range(10, 20):
+            return 20 - column_index
+        
+        # In the middle we skip 4 columns that are the strip but this previous steps have already excluded them,
+        # therefore the index continues from 20. This is a logical index and will be referred to as such going forward.
+        # There are 0 to 39 logical indexes, making the amount of columns 40.
+        # The actual count of colonies (whether they are used or not) will be referred to as the physical index, 0 to 47 in this case.
+        # Making the amount of physical columns 48.
 
-        # The colonies that are near the leftmost strip and they are going away from it.
-        # Therefore the distance from the strip is the same as the column_index -1 
-        # column index 2 needs to be mapped to 1
-        if column_index in range(2, 12):
-            return column_index - 1
-        # The colonies that are to the left of the middle strip and they are going away from it
-        # Therefore the distance from the strip is the max index (23) minus the column_index
-        elif column_index in range(12, 22):
-            return 22 - column_index
-        # The colonies that are to the right of the middle strip and they are going away from it
-        # Therefore the distance from the strip is the column_index minus the min index 25 (26 needs to mapped to 1)
-        elif column_index in range(26, 36):
-            return column_index - 25
-        # The colonies that are left of the rightmost strip and they are going away from it
-        # Therefore the distance from the strip is the max index 46 minus the column_index (45 needs to mapped to 1)
-        elif column_index in range(36, 46):
-            return 46 - column_index
+        # 20 to 30 (physicaly 26 to 35) are the colonies that are to the right of the middle strip and they are going away from it,
+        # therefore the distance from the strip is the column_index minus the min index -1 (to make it 1 based)
+        # 20 needs to mapped to 1 and 30 to 10
+        elif column_index in range(20, 30):
+            return column_index - 19
+        # 30 to 40 are the colonies that are left of the rightmost strip and they are going away from it,
+        # therefore the distance from the strip is the max index 40 minus the column_index
+        # 30 needs to mapped to 1 and 40 to 10
+        elif column_index in range(30, 40):
+            return 40 - column_index
         else:
-            return -1        
+            raise ValueError(f'Column index {column_index} is not a column in a 1536 well plate, this format has 40 columns within the context of this program')
     else:
         raise ValueError(f'Format {plate_format} is not supported')
 
