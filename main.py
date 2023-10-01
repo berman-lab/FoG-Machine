@@ -36,10 +36,7 @@ def main():
     temprature = args.temperature
     drug_name = args.drug
     
-
-    input_images = get_files_from_directory(input_path , '.png')
-    organized_images = {}
-
+    # Get data from config file
     config = ''
     with open('config.json') as json_file:
         config = json.load(json_file)
@@ -71,10 +68,15 @@ def main():
     QC_dir = create_directory(input_path, f'QC_ISO_PL_{plate_num}')
     # Create the output directories for the processed data
     output_dir_processed_data = create_directory(input_path, f'ISO_PL_{plate_num}_processed_data')
-
     output_dir_graphs = create_directory(input_path, f'ISO_PL_{plate_num}_graphs')
 
     save_run_parameters(QC_dir, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold)
+
+    input_images = get_files_from_directory(input_path , '.png')
+    organized_images = {}
+
+    # Get the images from the input directory 
+    input_images = get_files_from_directory(input_path , '.png')
     
     organized_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name, colony_threshold, plate_format, output_dir_images)
 
@@ -884,6 +886,108 @@ def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, plate_nu
     
     plt.tight_layout()
     plt.savefig(os.path.join(graphs_dir, f'{prefix_name}_{plate_num}_FoG_and_{DI_cutoff_text.replace(" " , "_")}_hist.png'), dpi=500)
+
+
+def generate_simple_test_images(save_path, start_row, start_column):
+    # Generate test images
+
+    # 24hr and 24hr_ND
+    img_24hr = np.zeros((3096, 4128, 3), np.uint8)
+
+    white = (255, 255, 255)
+    move_x = 54
+    move_y = 54
+    y_start_loc = 15 + start_row
+
+    y_start_indexes = []
+    for i in range(1, 21):
+        y_start_indexes.append(y_start_loc)
+        y_start_loc += move_y
+    
+    # Input actual pixel values for the colony sizes
+    for y_start_index in y_start_indexes:
+        
+        x_location = 150 + start_column
+        colony_size = 1
+        
+        for i in range(1, 11):
+            img_24hr[y_start_index : y_start_index + 1, x_location : x_location + (colony_size * i)] = white
+            x_location += move_x
+
+    cv2.imwrite(os.path.join(save_path ,'test_24hr_1-4.png'), img_24hr)
+    cv2.imwrite(os.path.join(save_path ,'test_24hr_1-4_ND.png'), img_24hr)
+
+    # 48hr ND image
+    img_48hr_ND = np.zeros((3096, 4128, 3), np.uint8)
+    
+    # A1, B1, C1, D1, E1 - all 10
+    for y_start_index in y_start_indexes:
+            
+            x_location = 150 + start_column
+            colony_size = 10
+            
+            for i in range(1, 11):
+                img_48hr_ND[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                x_location += move_x
+
+    
+    cv2.imwrite(os.path.join(save_path ,'test_48hr_1-4_ND.png'), img_48hr_ND)
+
+    # 48hr image
+    img_48hr = np.zeros((3096, 4128, 3), np.uint8)
+
+    # A1 - 10, 10, 10, 4, 5, 6, 7, 8, 9, 10
+    colony_sizes = [10, 10, 10, 4, 5, 6, 7, 8, 9, 10]
+    for y_start_index in y_start_indexes[0:4]:
+            
+            x_location = 150 + start_column
+            
+            for colony_size in colony_sizes:
+                img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                x_location += move_x
+
+    # B1- 8, 9, 9, 10, 10, 10, 10, 10. 10, 10
+    colony_sizes = [8, 9, 9, 10, 10, 10, 10, 10, 10, 10]
+    for y_start_index in y_start_indexes[4:8]:
+            
+            x_location = 150 + start_column
+            
+            for colony_size in colony_sizes:
+                img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                x_location += move_x 
+
+    # C1 - 3, 4, 5, 5, 6, 8, 9, 9, 10, 10
+    colony_sizes = [3, 4, 5, 5, 6, 8, 9, 9, 10, 10]
+    for y_start_index in y_start_indexes[8:12]:
+            
+            x_location = 150 + start_column
+            
+            for colony_size in colony_sizes:
+                img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                x_location += move_x
+            
+    # D1 - 1, 2, 3, 7, 7, 8, 9, 10, 10, 10
+    colony_sizes = [1, 2, 3, 7, 7, 8, 9, 10, 10, 10]
+    for y_start_index in y_start_indexes[12:16]:
+            
+            x_location = 150 + start_column
+            
+            for colony_size in colony_sizes:
+                img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                x_location += move_x
+
+    # E1 - 0, 0, 0, 4, 5, 6, 7, 8, 9, 10
+    colony_sizes = [0, 0, 0, 4, 5, 6, 7, 8, 9, 10]
+    for y_start_index in y_start_indexes[16:20]:
+            
+            x_location = 150 + start_column
+            
+            for colony_size in colony_sizes:
+                img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                x_location += move_x
+
+
+    cv2.imwrite(os.path.join(save_path ,'test_48hr_1-4.png'), img_48hr)
 
 if __name__ == "__main__":
     main()
