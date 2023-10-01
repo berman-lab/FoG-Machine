@@ -25,8 +25,7 @@ def main():
     parser.add_argument('-t', '--temperature', help='The incubation temperature in celsius', required=True)
     parser.add_argument('-d', '--drug', help='The drug name', required=True)
 
-    parser.add_argument('-qc', help='generate QC pictures', action='store_true')
-    
+
     args = parser.parse_args()
     input_path = os.path.normcase(args.path)
     prefix_name = args.prefix_name
@@ -37,7 +36,6 @@ def main():
     temprature = args.temperature
     drug_name = args.drug
     
-    is_generate_qc = args.qc
 
     input_images = get_files_from_directory(input_path , '.png')
     organized_images = {}
@@ -76,17 +74,14 @@ def main():
 
     output_dir_graphs = create_directory(input_path, f'ISO_PL_{plate_num}_graphs')
 
-    save_run_parameters(QC_dir, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold, is_generate_qc)
+    save_run_parameters(QC_dir, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold)
     
     organized_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name, colony_threshold, plate_format, output_dir_images)
 
     # Get the areas in the experiment plates
     growth_area_coordinates = get_growth_areas_coordinates(plate_format)
 
-
-    if(is_generate_qc):
-        generate_qc_images(organized_images, growth_area_coordinates, QC_dir)
-
+    generate_qc_images(organized_images, growth_area_coordinates, QC_dir)
 
     # Save growth areas in excel file
     growth_areas_df = pd.DataFrame(growth_area_coordinates.reshape(-1, 1), columns=['growth_areas'])
@@ -151,7 +146,7 @@ def create_directory(parent_directory, nested_directory_name):
     return new_dir_path
 
 
-def save_run_parameters(output_dir_processed_data, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold, is_generate_qc):
+def save_run_parameters(output_dir_processed_data, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold):
     with open(os.path.join(output_dir_processed_data, f'{prefix_name}_{plate_num}_run_parameters.txt'), 'w') as f:
         f.write(f'path: {input_path}\n')
         f.write(f'prefix_name: {prefix_name}\n')
@@ -161,7 +156,6 @@ def save_run_parameters(output_dir_processed_data, input_path, prefix_name, medi
         f.write(f'drug_name: {drug_name}\n')
         f.write(f'plate_format: {plate_format}\n')
         f.write(f'colony_threshold: {colony_threshold}\n')
-        f.write(f'is_generate_qc: {is_generate_qc}\n')
 
 
 def preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name ,colony_threshold, plate_format, output_path):
