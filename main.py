@@ -340,6 +340,11 @@ def get_growth_areas_coordinates(plate_format):
             # then iterate over the columns producing the areas in the order of 
             # left to right and top to bottom as required
             for column_index in range(48):
+
+                # Skip the columns in which the strip is located as there are no cells there
+                if column_index in [0, 1, 22, 23, 24, 25, 46, 47]:
+                    continue
+
                 curr_area_start_x = start_x + round(column_index * step_x)
                 curr_area_end_x = (start_x + round((column_index + 1) * step_x))
 
