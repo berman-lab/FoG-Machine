@@ -72,6 +72,8 @@ def main():
 
     save_run_parameters(QC_dir, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold)
 
+    generate_test_images(input_path, start_row, start_col)
+
     input_images = get_files_from_directory(input_path , '.png')
     organized_images = {}
 
@@ -888,7 +890,7 @@ def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, plate_nu
     plt.savefig(os.path.join(graphs_dir, f'{prefix_name}_{plate_num}_FoG_and_{DI_cutoff_text.replace(" " , "_")}_hist.png'), dpi=500)
 
 
-def generate_simple_test_images(save_path, start_row, start_column):
+def generate_test_images(save_path, start_row, start_column):
     # Generate test images
 
     # 24hr and 24hr_ND
@@ -897,7 +899,7 @@ def generate_simple_test_images(save_path, start_row, start_column):
     white = (255, 255, 255)
     move_x = 54
     move_y = 54
-    y_start_loc = 15 + start_row
+    y_start_loc = 20 + start_row
 
     y_start_indexes = []
     for i in range(1, 21):
@@ -907,7 +909,7 @@ def generate_simple_test_images(save_path, start_row, start_column):
     # Input actual pixel values for the colony sizes
     for y_start_index in y_start_indexes:
         
-        x_location = 150 + start_column
+        x_location = 152 + start_column
         colony_size = 1
         
         for i in range(1, 11):
@@ -923,7 +925,7 @@ def generate_simple_test_images(save_path, start_row, start_column):
     # A1, B1, C1, D1, E1 - all 10
     for y_start_index in y_start_indexes:
             
-            x_location = 150 + start_column
+            x_location = 152 + start_column
             colony_size = 10
             
             for i in range(1, 11):
@@ -940,7 +942,7 @@ def generate_simple_test_images(save_path, start_row, start_column):
     colony_sizes = [10, 10, 10, 4, 5, 6, 7, 8, 9, 10]
     for y_start_index in y_start_indexes[0:4]:
             
-            x_location = 150 + start_column
+            x_location = 152 + start_column
             
             for colony_size in colony_sizes:
                 img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
@@ -950,7 +952,7 @@ def generate_simple_test_images(save_path, start_row, start_column):
     colony_sizes = [8, 9, 9, 10, 10, 10, 10, 10, 10, 10]
     for y_start_index in y_start_indexes[4:8]:
             
-            x_location = 150 + start_column
+            x_location = 152 + start_column
             
             for colony_size in colony_sizes:
                 img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
@@ -960,7 +962,7 @@ def generate_simple_test_images(save_path, start_row, start_column):
     colony_sizes = [3, 4, 5, 5, 6, 8, 9, 9, 10, 10]
     for y_start_index in y_start_indexes[8:12]:
             
-            x_location = 150 + start_column
+            x_location = 152 + start_column
             
             for colony_size in colony_sizes:
                 img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
@@ -970,7 +972,7 @@ def generate_simple_test_images(save_path, start_row, start_column):
     colony_sizes = [1, 2, 3, 7, 7, 8, 9, 10, 10, 10]
     for y_start_index in y_start_indexes[12:16]:
             
-            x_location = 150 + start_column
+            x_location = 152 + start_column
             
             for colony_size in colony_sizes:
                 img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
@@ -980,7 +982,7 @@ def generate_simple_test_images(save_path, start_row, start_column):
     colony_sizes = [0, 0, 0, 4, 5, 6, 7, 8, 9, 10]
     for y_start_index in y_start_indexes[16:20]:
             
-            x_location = 150 + start_column
+            x_location = 152 + start_column
             
             for colony_size in colony_sizes:
                 img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
