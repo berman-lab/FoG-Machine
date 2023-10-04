@@ -72,7 +72,12 @@ def main():
 
     save_run_parameters(QC_dir, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold)
 
-    generate_test_images(input_path, start_row, start_col)
+    
+    # This is slightly dirty but it is the easiest and won't require changes if someone wants to use tests
+    # Make sure not to have any files in the input directory for this option
+    if 'simple_tests' in input_path:
+        generate_test_images(input_path, start_row, start_col)
+
 
     input_images = get_files_from_directory(input_path , '.png')
     organized_images = {}
@@ -80,16 +85,22 @@ def main():
     # Get the images from the input directory 
     input_images = get_files_from_directory(input_path , '.png')
     
+    # Check which divisions have files present in the input directory
+    active_divisions = check_active_divisions(input_images, text_division_of_origin_96_well_plate)
+
+
     organized_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name, colony_threshold, plate_format, output_dir_images)
+
 
     # Get the areas in the experiment plates
     growth_area_coordinates = get_growth_areas_coordinates(plate_format)
-
-    generate_qc_images(organized_images, growth_area_coordinates, QC_dir)
-
     # Save growth areas in excel file
     growth_areas_df = pd.DataFrame(growth_area_coordinates.reshape(-1, 1), columns=['growth_areas'])
     growth_areas_df.to_excel(os.path.join(QC_dir, f'ISO_PL_{plate_num}_growth_areas.xlsx'), index=False)
+
+
+    generate_qc_images(organized_images, growth_area_coordinates, QC_dir)
+
 
     calculated_areas = {}
     for image_name, image in organized_images.items():
@@ -100,9 +111,9 @@ def main():
     raw_areas_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.xlsx'), index=False)
 
     # Calculate the DI (Distance of Inhibition) for each strain
-    DI_df = calculate_DI(raw_areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate)
+    DI_df = calculate_DI(raw_areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate, active_divisions)
     
-    FoG_df = calculate_FoG(raw_areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate)
+    FoG_df = calculate_FoG(raw_areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions)
 
     # Merge the DI (Distance of Inhibition) and FoG dataframes on row_index, column_index
     processed_data_df = pd.merge(DI_df, FoG_df, on=['row_index', 'column_index'])
@@ -113,8 +124,11 @@ def main():
     processed_data_df['drug'] = drug_name
     processed_data_df['plate_format'] = plate_format
 
+    # Add the origin well text field
+    processed_data_df = convert_origin_row_row_and_column_to_well_text(processed_data_df)
+
     # Set column order to file_name_24hr, file_name_48hr, row_index, column_index, DI, FoG, media, temprature, drug, plate_format
-    processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'row_index', 'column_index', 'DI', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
+    processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'origin_well', 'row_index', 'column_index', 'DI', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
 
     processed_data_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
 
@@ -160,6 +174,35 @@ def save_run_parameters(output_dir_processed_data, input_path, prefix_name, medi
         f.write(f'drug_name: {drug_name}\n')
         f.write(f'plate_format: {plate_format}\n')
         f.write(f'colony_threshold: {colony_threshold}\n')
+
+
+def check_active_divisions(input_images, text_division_of_origin_96_well_plate):
+    '''
+    Description
+    -----------
+    Check which divisions have files present in the input directory
+
+    Parameters
+    ----------
+    input_images : list
+        A list of the paths to the images to be preprocessed
+    text_division_of_origin_96_well_plate : list str
+        A list of the text divisions of the original plate layout that the images were generated from ('1-4', '5-8', '9-12')
+
+    Returns
+    -------
+    active_divisions : dict
+        keys :
+            is_1-4_active : bool
+            is_5-8_active : bool
+            is_9-12_active : bool
+        indicating if there are files for this division in the input directory
+    '''
+    active_divisions = {}
+    for division in text_division_of_origin_96_well_plate:
+        active_divisions[f'is_{division}_active'] = any(division in item for item in input_images)
+
+    return active_divisions
 
 
 def preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name ,colony_threshold, plate_format, output_path):
@@ -503,7 +546,7 @@ def get_distance_from_strip(column_index, plate_format):
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def calculate_DI(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate):
+def calculate_DI(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate, active_divisions):
     '''
     Description
     -----------
@@ -517,9 +560,10 @@ def calculate_DI(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_w
         how many growth areas are in the image (96, 384, 1536)
     DI_cutoff : int
         The cutoff for the DI (usually 50% growth reduction)
-    text_division_of_origin_96_well_plate : str
-        The text division of the original plate layout that the images were generated from.
-        Usually ['1-4', '5-8', '9-12']
+    text_division_of_origin_96_well_plate : list str
+        The text division of the original plate layout that the images were generated from (['1-4', '5-8', '9-12'])
+    active_divisions : dict
+        Indicates which divisions have been used in the experiment
 
     Returns
     -------
@@ -540,56 +584,45 @@ def calculate_DI(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_w
     origin_column_indexes = []
     DIs = []
 
-    # Make a list of the wells in the original 96 well plate
-    origin_wells = create_96_well_plate_layout()
+    # Make a list of the wells this current experiment plate came from.
+    # Each experiment plate contain, at most, 32 strains.
+    origin_wells = create_32_well_plate_layout()
 
     # Get unique file names
     unique_file_names = list(areas_df.file_name.unique())
 
-    # Take the name that has 24hr in it and does not have ND in it
-    experiment_plates_24hr = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" not in file_name]
-    # Take the name that has 24hr in it and has ND in it
-    control_plates_24hr_ND = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" in file_name]
-    
-
     if plate_format == 1536:
         # Find the pairs of plates as needed for the calculation of the DI (Distance of Inhibition)
         for division in text_division_of_origin_96_well_plate:
-            experiment_plate_24hr = [plate for plate in experiment_plates_24hr if division in plate]
-            control_plate_24hr_ND = [plate for plate in control_plates_24hr_ND if division in plate]
             
-            # If either are empty that means that the expriement was not done for less strains
-            if len(control_plate_24hr_ND) == 0 or len(experiment_plate_24hr) == 0:
+            # Skip the inactive divisions
+            if not active_divisions[f'is_{division}_active']:
                 continue
-            elif len(control_plate_24hr_ND) > 1 or len(experiment_plate_24hr) > 1:
-                raise ValueError(f'There is more than one plate for {division}')
 
-            control_plate_24hr_ND = control_plate_24hr_ND[0]
-            experiment_plate_24hr = experiment_plate_24hr[0]
+            plates = get_plates_by_division(division, unique_file_names)
+            
+            control_plate_24hr_ND = plates['24hr_ND']
+            experiment_plate_24hr = plates['24hr']
 
             for (origin_well_row, origin_well_column) in origin_wells:
+                
                 # Get the indexes of the growth areas in the experiment plate
                 experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
-                
-                # Since a 1536 plate has 8 time the rows a 96 well plate, but the rows in the 1536
-                # are divided into groups of 4 in our case, we need to multiply the row index by 4 to get the correct row index in the 1536 plate.
-                # This allows to filter the dataframe by the correct starting row index
-                # and end row is handeled by the function call ahead using the format of the plate
-                exp_row = origin_well_row * 4
 
-                ND_df_rows = get_plate_growth_area_sizes(areas_df, control_plate_24hr_ND, exp_row, experiment_well_indexes, plate_format)
-                ND_mean = ND_df_rows.area.mean()
+                ND_df_rows_24hr = get_plate_growth_area_sizes(areas_df, control_plate_24hr_ND, experiment_well_indexes, plate_format)
+                ND_mean_24hr = ND_df_rows_24hr.area.mean()
 
                 # Find the DI (Distance of Inhibition) by finding the first growth area that has a mean of less than ND_mean * DI_cutoff
-                exp_growth_areas = get_plate_growth_area_sizes(areas_df, experiment_plate_24hr, exp_row, experiment_well_indexes, plate_format)
-                
-                exp_mean_growth_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values
+                exp_growth_areas = get_plate_growth_area_sizes(areas_df, experiment_plate_24hr, experiment_well_indexes, plate_format)
+
+                # We need to reverse the list since we always want the list to have the colonies closest to the strip at the end.
+                exp_mean_growth_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1]
 
                 # Find the first growth area that has a mean of less than ND_mean * DI_cutoff
                 DI_distance_from_strip = -1
-                for i, growth_area in enumerate(exp_mean_growth_by_distance_from_strip[::-1]):
-                    if growth_area < ND_mean * DI_cutoff:
-                        DI_distance_from_strip = len(exp_mean_growth_by_distance_from_strip) - i
+                for i, growth_area_size in enumerate(exp_mean_growth_by_distance_from_strip):
+                    if growth_area_size < ND_mean_24hr * DI_cutoff:
+                        DI_distance_from_strip = i
                         break
                 
                 # Add the file name, origin row and column indexes, and the DI
@@ -610,53 +643,120 @@ def calculate_DI(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_w
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def create_96_well_plate_layout():
-    return list(itertools.product(range(8), range(12)))
-
-
-def convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format):
+def get_plates_by_division(current_division, unique_file_names):
     '''
     Description
     -----------
-    Convert the index from the original plate to the indexes in the experiment plate
+    Get the plates by division of the original 96 well plate provided
+
+    Parameters
+    ----------
+    current_division : str
+        The text division of the original plate layout that the images were generated from ('1-4', '5-8', '9-12')
+    unique_file_names : list
+        A list of the unique file names in the dataframe
+
+    Returns
+    -------
+    experiment_plates : dict
+        A dictionary with '24hr', '24hr_ND', '48hr', '48hr_ND' as keys and the file names as values        
+    '''
+    experiment_plate_24hr = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', False, current_division)
+    control_plate_24hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', True, current_division)
+    experiment_plate_48hr = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', False, current_division)
+    control_plate_48hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', True, current_division)
+    
+    return {'24hr': experiment_plate_24hr[0], '24hr_ND': control_plate_24hr_ND[0],
+            '48hr': experiment_plate_48hr[0], '48hr_ND': control_plate_48hr_ND[0]}
+
+
+def get_plate_name_by_time_ND_and_division(file_names ,time, is_ND, current_division):
+    '''
+    Helper function to the function get_plates_by_division
+    '''
+    return [file_name for file_name in file_names if (time in file_name) and
+                                                     ('ND' if is_ND else '') in file_name and
+                                                     (current_division in file_name)]
+        
+
+def create_32_well_plate_layout():
+    return list(itertools.product(range(8), range(4)))
+
+
+def convert_origin_row_to_experiment_rows(origin_row_index, plate_format):
+    '''
+    Description
+    -----------
+    convert the origin row index (the row index in the 96 well plate) to the row index in the experiment plate
+
+    Parameters
+    ----------
+    origin_row_index : int
+        The row index of the current growth area in the original plate
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+    
+    Returns
+    -------
+    row_indexes : list int
+        A list of the row indexes of the growth areas in the experiment plate based on the plate format
+    '''
+
+    if plate_format == 1536:
+        # Since a 1536 plate has 8 time the rows a 96 well plate, but the rows in the 1536
+        # are divided into groups of 4 in our case, we need to multiply the row index by 4 to get the correct row index in the 1536 plate.
+        # This allows to filter the dataframe by the correct starting row index
+        # and end row is handeled by the function call ahead using the format of the plate
+        return [(origin_row_index * 4) + i for i in range(4)]
+    else:
+        raise ValueError(f'Format {plate_format} is not supported')
+
+
+def convert_original_index_to_experiment_wells_indexes(origin_row_index, origin_column_index, plate_format):
+    '''
+    Description
+    -----------
+    Convert the index from the original plate to the logical indexes in the experiment plate
     
     Parameters
     ----------
     origin_row_index : int
-        The row index of the current growth area
+        The row index of the origin well
     origin_column_index : int
-        The column index of the current growth area
+        The column index of the origin well
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
         
     Returns
     -------
-    A string with the well from which the growth area cells were taken - for example "A1"
+    A list of tuples containing the row and column indexes of the growth areas in the experiment plate
     '''
+    
+    experiment_row_indexes = convert_origin_row_to_experiment_rows(origin_row_index, plate_format)
+    
     if plate_format == 1536:
-        # Each row from the original plate is multiplied to 4 rows in the experiment plate
-        row_indexes = [origin_well_row + i for i in range(4)]
-
         # Based on the column index of the original plate map to the column index of the experiment plate
         # Since everythin is indexed on base 0 the column indexes are reduced by 1
-        if origin_well_column in [0,4,8]:
-            column_indexes = list(range(2,12))
-        elif origin_well_column in [1,5,9]:
-            column_indexes = list(range(12,22))
-        elif origin_well_column in [2,6,10]:
-            column_indexes = list(range(26,36))
-        elif origin_well_column in [3,7,11]:
-            column_indexes = list(range(36,46))
+        if origin_column_index == 0:
+            column_indexes = list(range(0,10))
+        elif origin_column_index == 1:
+            column_indexes = list(range(10,20))
+        elif origin_column_index == 2:
+            column_indexes = list(range(20,30))
+        elif origin_column_index == 3:
+            column_indexes = list(range(30,40))
+        else:
+            raise ValueError(f'Column index {origin_column_index} is not an index in the experiment plate')
 
         # All the growth areas that originated from the same well in the original well
         # are given by the product of the row and column indexes as done here
-        return itertools.product(row_indexes, column_indexes)
+        return itertools.product(experiment_row_indexes, column_indexes)
 
     else:
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def get_plate_growth_area_sizes(areas_df, plate_name, experiment_begin_row, experiment_well_indexes, plate_format):
+def get_plate_growth_area_sizes(areas_df, plate_name, experiment_well_indexes, plate_format):
     '''
     Description
     -----------
@@ -668,8 +768,6 @@ def get_plate_growth_area_sizes(areas_df, plate_name, experiment_begin_row, expe
         The dataframe containing the areas of the growth areas
     plate_name : str
         The name of the plate from which the growth areas were taken
-    experiment_begin_row : int
-        The row index of the first growth area in the experiment plate
     experiment_well_indexes : list
         A list of the indexes of the wells in the experiment plate that were used in the experiment
     plate_format : int
@@ -681,15 +779,15 @@ def get_plate_growth_area_sizes(areas_df, plate_name, experiment_begin_row, expe
     '''
     if plate_format == 1536:
         return areas_df.loc[(areas_df.file_name == plate_name) &
-                                            ((areas_df.row_index >= experiment_begin_row) & 
-                                                (areas_df.row_index <= experiment_begin_row + 3)) &
+                                            ((areas_df.row_index >= experiment_well_indexes[0][0]) & 
+                                                (areas_df.row_index <= experiment_well_indexes[-1][0])) &
                                             ((areas_df.column_index <= experiment_well_indexes[-1][-1]) &
                                                 (areas_df.column_index >= experiment_well_indexes[0][-1])), :]
     else:
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate):
+def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions):
     '''
     Description
     -----------
@@ -703,8 +801,10 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
         The dataframe containing the DI (Distances of Inhibition) values of the strains
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
-    The text division of the original plate layout that the images were generated from.
-        Usually ['1-4', '5-8', '9-12']
+    text_division_of_origin_96_well_plate : list str
+        The text division of the original plate layout that the images were generated from (['1-4', '5-8', '9-12'])
+    active_divisions : dict
+        Indicates which divisions have been used in the experiment
 
     Returns
     -------
@@ -717,7 +817,6 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
             The column index of the well from which the growth area was taken
         FoG : float
             The fraction of growth of the well from which the growth area was taken
-    
     '''
 
     # Create lists to later be used for creating the dataframe
@@ -726,51 +825,34 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
     origin_column_indexes = []
     FoGs = []
 
-    # Make a list of the wells in the original 96 well plate
-    origin_wells = create_96_well_plate_layout()
+    # Make a list of the wells this current experiment plate came from.
+    # Each experiment plate contain, at most, 32 strains.
+    origin_wells = create_32_well_plate_layout()
 
     # Get unique file names
     unique_file_names = list(areas_df.file_name.unique())
-
-    # Take the name that has 24hr in it and does not have ND in it to filter the DI_df with
-    experiment_plates_24hr = [file_name for file_name in unique_file_names if "24hr" in file_name and "ND" not in file_name]
-
-    # Take the name that has 48hr in it and does not have ND in it
-    experiment_plates_48hr = [file_name for file_name in unique_file_names if "48hr" in file_name and "ND" not in file_name]
-    # Take the name that has 48hr in it and has ND in it
-    control_plates_48hr_ND = [file_name for file_name in unique_file_names if "48hr" in file_name and "ND" in file_name]
     
-
     if plate_format == 1536:
         # Find the pairs of plates as needed for the calculation of the DI
         for division in text_division_of_origin_96_well_plate:
-            experiment_plate_24hr = [plate for plate in experiment_plates_24hr if division in plate]
-            experiment_plate_48hr = [plate for plate in experiment_plates_48hr if division in plate]
-            control_plate_48hr_ND = [plate for plate in control_plates_48hr_ND if division in plate]
 
-            # If either are empty that means that the expriement was not done for less strains
-            if len(control_plate_48hr_ND) == 0 or len(experiment_plate_48hr) == 0 or len(experiment_plate_24hr) == 0:
+            # Skip the inactive divisions
+            if not active_divisions[f'is_{division}_active']:
                 continue
-            elif len(control_plate_48hr_ND) > 1 or len(experiment_plate_48hr) > 1 or len(experiment_plate_24hr) > 1:
-                raise ValueError(f'There are more than one plate for {division}')
 
-            experiment_plate_24hr = experiment_plate_24hr[0]
-            experiment_plate_48hr = experiment_plate_48hr[0]
-            control_plate_48hr_ND = control_plate_48hr_ND[0]
+            plates = get_plates_by_division(division, unique_file_names)
+
+            experiment_plate_24hr = plates['24hr']
+            experiment_plate_48hr = plates['48hr']
+            control_plate_48hr_ND = plates['48hr_ND']
             
             for (origin_well_row, origin_well_column) in origin_wells:
                 # Get the indexes of the growth areas in the experiment plate
                 experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
-                
-                # Since a 1536 plate has 8 time the rows a 96 well plate, but the rows in the 1536
-                # are divided into groups of 4 in our case, we need to multiply the row index by 4
-                # to get the correct row index in the 1536 plate
-                exp_row = origin_well_row * 4
 
                 # Calculate the mean of the growth areas in the ND plate
-                ND_growth_area_sizes = get_plate_growth_area_sizes(areas_df, control_plate_48hr_ND, exp_row, experiment_well_indexes, plate_format)
-
-                ND_mean_48hr = ND_growth_area_sizes['area'].mean()
+                ND_48hr_colony_sizes = get_plate_growth_area_sizes(areas_df, control_plate_48hr_ND, experiment_well_indexes, plate_format)
+                ND_mean_48hr = ND_48hr_colony_sizes['area'].mean()
 
                 
                 # FoG is defined as the average growth at 48hr in drug over DI divided by the average of growth at 48hr in ND
@@ -794,12 +876,17 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
                     continue
 
                 
-                # Distance is based 1 counting, so we need to subtract 1 to get the index from which to get the mean of the growth areas
-                # that are closer to the drug strip than the DI
-                exp_growth_areas = get_plate_growth_area_sizes(areas_df, experiment_plate_48hr, exp_row, experiment_well_indexes, plate_format)
-                exp_mean_growth_over_DI = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1][strain_DI - 1:].mean()
+                # Calculate the mean colony size over the DI
+                exp_growth_areas = get_plate_growth_area_sizes(areas_df, experiment_plate_48hr, experiment_well_indexes, plate_format)
                 
-                FoG = exp_mean_growth_over_DI / ND_mean_48hr
+
+                exp_mean_colony_size_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1]
+                
+                # Calculate the mean colony size over the DI from all the colonies that are closer to the strip than the DI -
+                # Add 1 to the starin DI since we are only calculating the mean colony size that is closer to the strip than the DI
+                exp_mean_colony_size_over_DI = exp_mean_colony_size_by_distance_from_strip[strain_DI + 1:].mean()
+                
+                FoG = exp_mean_colony_size_over_DI / ND_mean_48hr
                 
                 file_names.append(experiment_plate_48hr)
                 origin_row_indexes.append(origin_well_row)
@@ -815,6 +902,33 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
           
     else:
         raise ValueError(f'Format {plate_format} is not supported')
+
+
+def convert_origin_row_row_and_column_to_well_text(processed_data_df):
+    '''
+    Description
+    -----------
+    Convert the origin row and column indexes to the well text in the original plate
+
+    Parameters
+    ----------
+    processed_data_df : pandas dataframe
+        The dataframe containing the processed data. Must have fields:
+            - origin_row_index : int
+            - origin_column_index : int
+    
+    Returns
+    -------
+    pandas dataframe
+        The dataframe with the origin row and column indexes converted to the well text in the original plate
+        and added as a column: 'origin_well'
+    '''
+    # Create a list of the wells in the original 96 well plate
+    origin_wells = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+    processed_data_df['origin_well'] = processed_data_df.apply(lambda row: f'{origin_wells[row.row_index]}{row.column_index + 1}', axis=1)
+    
+    return processed_data_df
 
 
 def create_hist(data, ax, title, xlabel, linewidth=2):
@@ -891,11 +1005,26 @@ def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, plate_nu
 
 
 def generate_test_images(save_path, start_row, start_column):
-    # Generate test images
+    ''' 
+    Description
+    -----------
+    Generate test images
 
-    # 24hr and 24hr_ND
-    img_24hr = np.zeros((3096, 4128, 3), np.uint8)
+    Parameters
+    ----------
+    save_path : str
+        The path to the directory in which the images will be saved
+    start_row : int
+        The row index of the first growth area in the experiment plate
+    start_column : int
+        The column index of the first growth area in the experiment plate
 
+    Returns
+    -------
+    None
+    '''
+
+    # TODO - this is pretty gross at the moment due to the time rush, need to clean it up
     white = (255, 255, 255)
     move_x = 54
     move_y = 54
@@ -906,18 +1035,58 @@ def generate_test_images(save_path, start_row, start_column):
         y_start_indexes.append(y_start_loc)
         y_start_loc += move_y
     
+    # 24hr and 24hr_ND
+    img_24hr = np.zeros((3096, 4128, 3), np.uint8)
+
     # Input actual pixel values for the colony sizes
+    colony_sizes = [1, 1, 1, 1, 9, 9, 9, 9, 10, 10]
     for y_start_index in y_start_indexes:
         
         x_location = 152 + start_column
         colony_size = 1
         
-        for i in range(1, 11):
-            img_24hr[y_start_index : y_start_index + 1, x_location : x_location + (colony_size * i)] = white
+        for colony_size in colony_sizes:
+            img_24hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
             x_location += move_x
+
+    # A2
+    colony_sizes = [10, 10, 9, 9, 9, 9, 1, 1, 1, 1]
+    for y_start_index in y_start_indexes[0:4]:
+            
+            x_location = 152 + start_column + (move_x * 10)
+            
+            for colony_size in colony_sizes:
+                img_24hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                x_location += move_x
+
+    # A3
+    colony_sizes = [1, 1, 1, 1, 9, 9, 9, 9, 10, 10]
+    for y_start_index in y_start_indexes[0:4]:
+                
+                x_location = 152 + start_column + (move_x * 24)
+                
+                for colony_size in colony_sizes:
+                    img_24hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                    x_location += move_x
+
+
+    # A4
+    colony_sizes = [10, 10, 9, 9, 9, 9, 1, 1, 1, 1]
+    for y_start_index in y_start_indexes[0:4]:
+                    
+                    x_location = 152 + start_column + (move_x * 34)
+                    
+                    for colony_size in colony_sizes:
+                        img_24hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                        x_location += move_x
 
     cv2.imwrite(os.path.join(save_path ,'test_24hr_1-4.png'), img_24hr)
     cv2.imwrite(os.path.join(save_path ,'test_24hr_1-4_ND.png'), img_24hr)
+    cv2.imwrite(os.path.join(save_path ,'test_24hr_5-8.png'), img_24hr)
+    cv2.imwrite(os.path.join(save_path ,'test_24hr_5-8_ND.png'), img_24hr)
+    cv2.imwrite(os.path.join(save_path ,'test_24hr_9-12.png'), img_24hr)
+    cv2.imwrite(os.path.join(save_path ,'test_24hr_9-12_ND.png'), img_24hr)
+
 
     # 48hr ND image
     img_48hr_ND = np.zeros((3096, 4128, 3), np.uint8)
@@ -932,14 +1101,48 @@ def generate_test_images(save_path, start_row, start_column):
                 img_48hr_ND[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
                 x_location += move_x
 
-    
+
+    # A2
+    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+    for y_start_index in y_start_indexes[0:4]:
+                    
+        x_location = 152 + start_column + (move_x * 10)
+        
+        for colony_size in colony_sizes:
+            img_48hr_ND[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+            x_location += move_x
+
+
+    # A3
+    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+    for y_start_index in y_start_indexes[0:4]:
+                            
+        x_location = 152 + start_column + (move_x * 24)
+        
+        for colony_size in colony_sizes:
+            img_48hr_ND[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+            x_location += move_x
+
+    # A4
+    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+    for y_start_index in y_start_indexes[0:4]:
+                                        
+        x_location = 152 + start_column + (move_x * 34)
+        
+        for colony_size in colony_sizes:
+            img_48hr_ND[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+            x_location += move_x
+
     cv2.imwrite(os.path.join(save_path ,'test_48hr_1-4_ND.png'), img_48hr_ND)
+    cv2.imwrite(os.path.join(save_path ,'test_48hr_5-8_ND.png'), img_48hr_ND)
+    cv2.imwrite(os.path.join(save_path ,'test_48hr_9-12_ND.png'), img_48hr_ND)
+
 
     # 48hr image
     img_48hr = np.zeros((3096, 4128, 3), np.uint8)
 
-    # A1 - 10, 10, 10, 4, 5, 6, 7, 8, 9, 10
-    colony_sizes = [10, 10, 10, 4, 5, 6, 7, 8, 9, 10]
+    # A1 - all 10
+    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
     for y_start_index in y_start_indexes[0:4]:
             
             x_location = 152 + start_column
@@ -947,6 +1150,36 @@ def generate_test_images(save_path, start_row, start_column):
             for colony_size in colony_sizes:
                 img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
                 x_location += move_x
+
+    # A2 - 10, 10, 10, 10, 10, 10, 10, 2, 2, 2
+    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 2, 2, 2]
+    for y_start_index in y_start_indexes[0:4]:
+                
+                x_location = 152 + start_column + (move_x * 10)
+                
+                for colony_size in colony_sizes:
+                    img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                    x_location += move_x
+
+    # A3 - 3, 3, 3, 10, 10, 10, 10, 10, 10, 10
+    colony_sizes = [3, 3, 3, 10, 10, 10, 10, 10, 10, 10]
+    for y_start_index in y_start_indexes[0:4]:
+                
+                x_location = 152 + start_column + (move_x * 24)
+                
+                for colony_size in colony_sizes:
+                    img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                    x_location += move_x
+
+    # A4 - 10, 10, 10, 10, 10, 10, 10, 4, 4, 4
+    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 4, 4, 4]
+    for y_start_index in y_start_indexes[0:4]:
+                
+                x_location = 152 + start_column + (move_x * 34)
+                
+                for colony_size in colony_sizes:
+                    img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
+                    x_location += move_x
 
     # B1- 8, 9, 9, 10, 10, 10, 10, 10. 10, 10
     colony_sizes = [8, 9, 9, 10, 10, 10, 10, 10, 10, 10]
@@ -958,8 +1191,8 @@ def generate_test_images(save_path, start_row, start_column):
                 img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
                 x_location += move_x 
 
-    # C1 - 3, 4, 5, 5, 6, 8, 9, 9, 10, 10
-    colony_sizes = [3, 4, 5, 5, 6, 8, 9, 9, 10, 10]
+    # C1 - 4, 5, 6, 10, 10, 10, 10, 10, 10, 10
+    colony_sizes = [4, 5, 6, 10, 10, 10, 10, 10, 10, 10]
     for y_start_index in y_start_indexes[8:12]:
             
             x_location = 152 + start_column
@@ -968,8 +1201,8 @@ def generate_test_images(save_path, start_row, start_column):
                 img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
                 x_location += move_x
             
-    # D1 - 1, 2, 3, 7, 7, 8, 9, 10, 10, 10
-    colony_sizes = [1, 2, 3, 7, 7, 8, 9, 10, 10, 10]
+    # D1 - 2, 3, 4, 10, 10, 10, 10, 10, 10, 10
+    colony_sizes = [2, 3, 4, 10, 10, 10, 10, 10, 10, 10]
     for y_start_index in y_start_indexes[12:16]:
             
             x_location = 152 + start_column
@@ -978,8 +1211,8 @@ def generate_test_images(save_path, start_row, start_column):
                 img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
                 x_location += move_x
 
-    # E1 - 0, 0, 0, 4, 5, 6, 7, 8, 9, 10
-    colony_sizes = [0, 0, 0, 4, 5, 6, 7, 8, 9, 10]
+    # E1 - 0, 0, 0, 10, 10, 10, 10, 10, 10, 10
+    colony_sizes = [0, 0, 0, 10, 10, 10, 10, 10, 10, 10]
     for y_start_index in y_start_indexes[16:20]:
             
             x_location = 152 + start_column
@@ -990,6 +1223,8 @@ def generate_test_images(save_path, start_row, start_column):
 
 
     cv2.imwrite(os.path.join(save_path ,'test_48hr_1-4.png'), img_48hr)
+    cv2.imwrite(os.path.join(save_path ,'test_48hr_5-8.png'), img_48hr)
+    cv2.imwrite(os.path.join(save_path ,'test_48hr_9-12.png'), img_48hr)
 
 if __name__ == "__main__":
     main()
