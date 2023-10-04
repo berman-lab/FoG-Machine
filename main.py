@@ -99,9 +99,6 @@ def main():
     growth_areas_df.to_excel(os.path.join(QC_dir, f'ISO_PL_{plate_num}_growth_areas.xlsx'), index=False)
 
 
-    generate_qc_images(organized_images, growth_area_coordinates, QC_dir)
-
-
     calculated_areas = {}
     for image_name, image in organized_images.items():
         image_areas = calculate_growth_in_areas(image_name ,image, growth_area_coordinates)
@@ -109,6 +106,7 @@ def main():
 
     raw_areas_df = organize_raw_data(calculated_areas, plate_format)
     raw_areas_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.xlsx'), index=False)
+
 
     # Calculate the DI (Distance of Inhibition) for each strain
     DI_df = calculate_DI(raw_areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate, active_divisions)
@@ -131,6 +129,8 @@ def main():
     processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'origin_well', 'row_index', 'column_index', 'DI', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
 
     processed_data_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
+
+    generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, QC_dir)
 
     create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, prefix_name, plate_num, DI_cutoff)
 
@@ -304,50 +304,6 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         cv2.imwrite(os.path.join(output_path, current_image_name + ".png"), cropped_image)
 
     return organized_images
-
-
-def generate_qc_images(organized_images, growth_area_coordinates, output_path):
-    '''
-    Description
-    -----------
-    Draw squares around the growth areas in the images for visualizing the areas in which the calculations are done
-
-    Parameters
-    ----------
-    organized_images : dict
-        A dictionary containing the images after preprocessing under the name of the image without the extension
-    growth_area_coordinates : numpy array
-        Contains the coordinates of the growth areas in the images
-    output_path : str
-        The path to the directory in which the preprocessed images will be saved
-    
-    Returns
-    -------
-    Boolean
-        True if the images were saved successfully, False otherwise
-    '''
-
-    # Overlay a grid on the images for visualizing the areas in which the calculations are done
-    for image_name ,image in organized_images.items():
-
-        # Copy the image to avoid modifying the original image
-        image = image.copy()
-
-        
-        border_color = (255, 255, 255)
-        border_thickness = 2
-
-        # Draw the borders of the growth areas
-        for coordintes_row in growth_area_coordinates:
-            for coordinte in coordintes_row:
-                start_point = (coordinte["start_x"], coordinte["start_y"])
-                end_point = (coordinte["end_x"], coordinte["end_y"])
-                image = cv2.rectangle(image, start_point, end_point, border_color, border_thickness)
-
-        # Save the result image
-        cv2.imwrite(f'{output_path}/{image_name}.png', image)
-    
-    return True 
 
 
 def get_growth_areas_coordinates(plate_format):
@@ -963,6 +919,54 @@ def create_hist(data, ax, title, xlabel, linewidth=2):
     ax.hist(data, bins=10, linewidth = linewidth, histtype='step')
     ax.set_ylabel('Count')
     ax.set_xlabel(xlabel)
+
+
+def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, output_path):
+    '''
+    Description
+    -----------
+    Draw squares around the growth areas in the images for visualizing the areas in which the calculations are done
+
+    Parameters
+    ----------
+    organized_images : dict
+        A dictionary containing the images after preprocessing under the name of the image without the extension
+    growth_area_coordinates : numpy array
+        Contains the coordinates of the growth areas in the images
+    raw_areas_df : pandas dataframe
+        The dataframe containing the areas of the growth areas
+    processed_data_df : pandas dataframe
+        The dataframe containing the processed data (DI and FoG)
+    output_path : str
+        The path to the directory in which the preprocessed images will be saved
+    
+    Returns
+    -------
+    Boolean
+        True if the images were saved successfully, False otherwise
+    '''
+
+    # Overlay a grid on the images for visualizing the areas in which the calculations are done
+    for image_name ,image in organized_images.items():
+
+        # Copy the image to avoid modifying the original image
+        image = image.copy()
+
+        
+        border_color = (255, 255, 255)
+        border_thickness = 2
+        
+        # Draw the borders of the growth areas
+        for coordintes_row in growth_area_coordinates:
+            for coordinte in coordintes_row:
+                start_point = (coordinte["start_x"], coordinte["start_y"])
+                end_point = (coordinte["end_x"], coordinte["end_y"])
+                image = cv2.rectangle(image, start_point, end_point, border_color, border_thickness)
+
+        # Save the result image
+        cv2.imwrite(f'{output_path}/{image_name}.png', image)
+    
+    return True
 
 
 def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, plate_num, DI_cutoff):
