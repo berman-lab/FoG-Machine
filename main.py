@@ -114,7 +114,7 @@ def main():
     FoG_df = calculate_FoG(raw_areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions)
 
     # Merge the DI (Distance of Inhibition) and FoG dataframes on row_index, column_index
-    processed_data_df = pd.merge(DI_df, FoG_df, on=['row_index', 'column_index'])
+    processed_data_df = pd.merge(DI_df, FoG_df, on=['row_index', 'column_index', 'file_name_24hr'])
 
     # Add the experiment conditions to the dataframe
     processed_data_df['media'] = media
@@ -130,9 +130,10 @@ def main():
 
     processed_data_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
 
-    generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, QC_dir)
+    generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, plate_format, QC_dir)
 
     create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, prefix_name, plate_num, DI_cutoff)
+
 
 def get_files_from_directory(path , extension):
     '''Get the full path to each file with the extension specified from the path'''
@@ -569,10 +570,10 @@ def calculate_DI(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_w
                 ND_mean_24hr = ND_df_rows_24hr.area.mean()
 
                 # Find the DI (Distance of Inhibition) by finding the first growth area that has a mean of less than ND_mean * DI_cutoff
-                exp_growth_areas = get_plate_growth_area_sizes(areas_df, experiment_plate_24hr, experiment_well_indexes, plate_format)
+                exp_growth_area_sizes = get_plate_growth_area_sizes(areas_df, experiment_plate_24hr, experiment_well_indexes, plate_format)
 
                 # We need to reverse the list since we always want the list to have the colonies closest to the strip at the end.
-                exp_mean_growth_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1]
+                exp_mean_growth_by_distance_from_strip = exp_growth_area_sizes.groupby('distance_from_strip')['area'].mean().values[::-1]
 
                 # Find the first growth area that has a mean of less than ND_mean * DI_cutoff
                 DI_distance_from_strip = -1
@@ -743,7 +744,7 @@ def get_plate_growth_area_sizes(areas_df, plate_name, experiment_well_indexes, p
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions):
+def calculate_FoG(areas_df, FoG_df, plate_format, text_division_of_origin_96_well_plate, active_divisions):
     '''
     Description
     -----------
@@ -777,6 +778,8 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
 
     # Create lists to later be used for creating the dataframe
     file_names = []
+    # For later merge with the DI_df
+    file_names_24hr = []
     origin_row_indexes = []
     origin_column_indexes = []
     FoGs = []
@@ -816,9 +819,9 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
                 # closer to the drug strip (than the DI) by the mean area of the ND
 
                 # Get the specific DI for the strain to filter the relevant growth areas later
-                strain_DI = int(DI_df.loc[(DI_df.file_name_24hr == experiment_plate_24hr) &
-                                        (DI_df.row_index == origin_well_row) &
-                                        (DI_df.column_index == origin_well_column), 'DI'].values[0])
+                strain_DI = int(FoG_df.loc[(FoG_df.file_name_24hr == experiment_plate_24hr) &
+                                        (FoG_df.row_index == origin_well_row) &
+                                        (FoG_df.column_index == origin_well_column), 'DI'].values[0])
                 
 
                 # if we get a distance of -1 that means that there was no distance at which a reduction of DI_cutoff was reached
@@ -845,15 +848,17 @@ def calculate_FoG(areas_df, DI_df, plate_format, text_division_of_origin_96_well
                 FoG = exp_mean_colony_size_over_DI / ND_mean_48hr
                 
                 file_names.append(experiment_plate_48hr)
+                file_names_24hr.append(experiment_plate_24hr)
                 origin_row_indexes.append(origin_well_row)
                 origin_column_indexes.append(origin_well_column)
                 FoGs.append(FoG)
 
-        DI_df = pd.DataFrame({'file_name_48hr': file_names,
+        FoG_df = pd.DataFrame({'file_name_48hr': file_names,
+                                'file_name_24hr': file_names_24hr,
                                 'row_index': origin_row_indexes,
                                 'column_index': origin_column_indexes,
                                 'FoG': FoGs})
-        return DI_df
+        return FoG_df
 
           
     else:
@@ -921,7 +926,7 @@ def create_hist(data, ax, title, xlabel, linewidth=2):
     ax.set_xlabel(xlabel)
 
 
-def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, output_path):
+def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, plate_format, output_path):
     '''
     Description
     -----------
@@ -946,6 +951,9 @@ def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, 
         True if the images were saved successfully, False otherwise
     '''
 
+    # Index the raw_areas_df by the file name, row index, and column index
+    indexed_raw_areas_df = raw_areas_df.set_index(['file_name', 'row_index', 'column_index'])
+
     # Overlay a grid on the images for visualizing the areas in which the calculations are done
     for image_name ,image in organized_images.items():
 
@@ -956,12 +964,21 @@ def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, 
         border_color = (255, 255, 255)
         border_thickness = 2
         
-        # Draw the borders of the growth areas
-        for coordintes_row in growth_area_coordinates:
-            for coordinte in coordintes_row:
+        # Full plate
+        for row_index, coordintes_row in enumerate(growth_area_coordinates):
+            for column_index, coordinte in enumerate(coordintes_row):
+
+                curr_colony_size = indexed_raw_areas_df.xs((image_name, row_index, column_index), level=['file_name', 'row_index', 'column_index'])['area'].values[0]
+                                
                 start_point = (coordinte["start_x"], coordinte["start_y"])
                 end_point = (coordinte["end_x"], coordinte["end_y"])
                 image = cv2.rectangle(image, start_point, end_point, border_color, border_thickness)
+
+                # Add the colony size and indexes to the bottom left corner of the rectangle
+                cv2.putText(image, f'{curr_colony_size:.0f}', (coordinte["start_x"] + 5, coordinte["start_y"] + 45), cv2.FONT_HERSHEY_COMPLEX, 0.5, border_color, 1)
+
+        # Individual growth areas by origin well
+
 
         # Save the result image
         cv2.imwrite(f'{output_path}/{image_name}.png', image)
