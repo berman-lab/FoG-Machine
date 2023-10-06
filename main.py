@@ -10,6 +10,7 @@ import scienceplots
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+
 def main():
     styles = ['science', 'notebook', 'grid']
     plt.style.use(styles)
@@ -123,7 +124,7 @@ def main():
     processed_data_df['plate_format'] = plate_format
 
     # Add the origin well text field
-    processed_data_df = convert_origin_row_row_and_column_to_well_text(processed_data_df)
+    processed_data_df = add_well_text_to_df_from_origin_row_row_and_column(processed_data_df)
 
     # Set column order to file_name_24hr, file_name_48hr, row_index, column_index, DI, FoG, media, temprature, drug, plate_format
     processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'origin_well', 'row_index', 'column_index', 'DI', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
@@ -631,9 +632,16 @@ def get_plate_name_by_time_ND_and_division(file_names ,time, is_ND, current_divi
     '''
     Helper function to the function get_plates_by_division
     '''
-    return [file_name for file_name in file_names if (time in file_name) and
-                                                     ('ND' if is_ND else '') in file_name and
+    
+    if is_ND:
+        files = [file_name for file_name in file_names if (time in file_name) and
+                                                     ('ND' in file_name) and
                                                      (current_division in file_name)]
+    else:
+        files = [file_name for file_name in file_names if (time in file_name) and
+                                                     ('ND' not in file_name) and
+                                                     (current_division in file_name)]
+    return files
         
 
 def create_32_well_plate_layout():
@@ -865,7 +873,7 @@ def calculate_FoG(areas_df, FoG_df, plate_format, text_division_of_origin_96_wel
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def convert_origin_row_row_and_column_to_well_text(processed_data_df):
+def add_well_text_to_df_from_origin_row_row_and_column(processed_data_df):
     '''
     Description
     -----------
@@ -887,9 +895,158 @@ def convert_origin_row_row_and_column_to_well_text(processed_data_df):
     # Create a list of the wells in the original 96 well plate
     origin_wells = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 
-    processed_data_df['origin_well'] = processed_data_df.apply(lambda row: f'{origin_wells[row.row_index]}{row.column_index + 1}', axis=1)
+    processed_data_df['origin_well'] = processed_data_df.apply(lambda row: f'{origin_wells[row.row_index]}{row.column_index + get_column_offset(row["file_name_24hr"].split("_")[-1])}', axis=1)
     
     return processed_data_df
+
+
+def convert_origin_row_and_column_to_well_text(origin_row_index, origin_column_index, division):
+    # Create a list of the wells in the original 96 well plate
+    origin_wells = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+    offset = get_column_offset(division)
+
+    return f'{origin_wells[origin_row_index]}{origin_column_index + offset}'
+
+
+def get_column_offset(division):
+    offset = 0
+    if division == '1-4':
+        offset = 1
+    elif division == '5-8':
+        offset = 5
+    elif division == '9-12':
+        offset = 9
+    else:
+        raise ValueError(f'Division {division} is not supported')
+    
+    return offset
+
+
+def get_image_part_for_origin_well(organized_images, division, origin_row, origin_column, growth_area_coordinates, plate_format):
+    '''
+    Description
+    -----------
+    Get the part of the image that contains the colonies on all experiments plates that came from the given origin well
+
+    Parameters
+    ----------
+    organized_images : dict
+        A dictionary containing the images after preprocessing under the name of the image without the extension
+    division : str
+        The text division of the original plate layout that the current images were generated from ('1-4', '5-8', '9-12')
+    origin_row : int
+        The row index of the origin well
+    origin_column : int
+        The column index of the origin well
+    growth_area_coordinates : numpy array
+        Contains the coordinates of the growth areas in the images
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+        
+    Returns
+    -------
+    image_parts: dict
+        A dictionary with the file names as keys and the image parts as values
+        Keys: 24hr, 24hr_ND, 48hr, 48hr_ND
+    '''
+    
+    image_parts = {}
+
+    plates = get_plates_by_division(division, organized_images.keys())
+
+    colony_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_row, origin_column, plate_format))
+
+    for plate in plates:
+        # image[start_row:end_row, start_col:end_col]
+        start_row = growth_area_coordinates[colony_indexes[0][0]][colony_indexes[-1][0]]["start_y"]
+        end_row = growth_area_coordinates[colony_indexes[-1][0], colony_indexes[-1][0]]["end_y"]
+        start_col = growth_area_coordinates[colony_indexes[0][0], colony_indexes[0][1]]["start_x"]
+        end_col = growth_area_coordinates[colony_indexes[-1][0], colony_indexes[-1][1]]["end_x"]
+        image_parts[plate] = organized_images[plates[plate]][start_row:end_row, start_col:end_col]
+
+    return image_parts
+
+
+def make_four_picture_grid(top_left, top_right, bottom_left, bottom_right):
+    '''Join 4 images into one image'''
+    top = cv2.hconcat([top_left, top_right])
+    bottom = cv2.hconcat([bottom_left, bottom_right])
+    joined_picutres = cv2.vconcat([top, bottom])
+    return joined_picutres
+
+
+def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, plate_format, output_path):
+    '''
+    Description
+    -----------
+    Draw squares around the growth areas in the images for visualizing the areas in which the calculations are done
+
+    Parameters
+    ----------
+    organized_images : dict
+        A dictionary containing the images after preprocessing under the name of the image without the extension
+    growth_area_coordinates : numpy array
+        Contains the coordinates of the growth areas in the images
+    raw_areas_df : pandas dataframe
+        The dataframe containing the areas of the growth areas
+    processed_data_df : pandas dataframe
+        The dataframe containing the processed data (DI and FoG)
+    output_path : str
+        The path to the directory in which the preprocessed images will be saved
+    
+    Returns
+    -------
+    Boolean
+        True if the images were saved successfully, False otherwise
+    '''
+
+    # Save the images after the preprocessing to be used for the inidividual growth areas by origin well
+    images_with_growth_data = {}
+
+    # Index the raw_areas_df by the file name, row index, and column index
+    indexed_raw_areas_df = raw_areas_df.set_index(['file_name', 'row_index', 'column_index'])
+
+    # Overlay a grid on the images for visualizing the areas in which the calculations are done
+    for image_name ,original_image in organized_images.items():
+
+        # Copy the image to avoid modifying the original image
+        image = original_image.copy()
+
+        
+        border_color = (255, 255, 255)
+        border_thickness = 2
+        
+        # Full plate
+        for row_index, coordintes_row in enumerate(growth_area_coordinates):
+            for column_index, coordinte in enumerate(coordintes_row):
+
+                curr_colony_size = indexed_raw_areas_df.xs((image_name, row_index, column_index), level=['file_name', 'row_index', 'column_index'])['area'].values[0]
+                
+                start_point = (coordinte["start_x"], coordinte["start_y"])
+                end_point = (coordinte["end_x"], coordinte["end_y"])
+                image = cv2.rectangle(image, start_point, end_point, border_color, border_thickness)
+
+                # Add the colony size and indexes to the bottom left corner of the rectangle
+                cv2.putText(image, f'{curr_colony_size:.0f}', (coordinte["start_x"] + 5, coordinte["start_y"] + 45), cv2.FONT_HERSHEY_COMPLEX, 0.5, border_color, 1)
+
+        # Save the result image
+        cv2.imwrite(f'{output_path}/{image_name}.png', image)
+        images_with_growth_data[image_name] = image
+
+    # Individual growth areas by origin well
+    origin_wells = create_32_well_plate_layout()
+
+    for origin_row, origin_column in origin_wells:
+        for division in text_division_of_origin_96_well_plate:
+            well_areas = get_image_part_for_origin_well(images_with_growth_data, division, origin_row, origin_column, growth_area_coordinates, plate_format)
+            
+            all_areas = make_four_picture_grid(well_areas['24hr_ND'], well_areas['48hr_ND'], well_areas['24hr'], well_areas['48hr'])
+
+            # Save the result image
+            cv2.imwrite(f'{output_path}/{image_name}_{convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)}.png', all_areas)
+    
+    return True
 
 
 def create_hist(data, ax, title, xlabel, linewidth=2):
@@ -924,66 +1081,6 @@ def create_hist(data, ax, title, xlabel, linewidth=2):
     ax.hist(data, bins=10, linewidth = linewidth, histtype='step')
     ax.set_ylabel('Count')
     ax.set_xlabel(xlabel)
-
-
-def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, plate_format, output_path):
-    '''
-    Description
-    -----------
-    Draw squares around the growth areas in the images for visualizing the areas in which the calculations are done
-
-    Parameters
-    ----------
-    organized_images : dict
-        A dictionary containing the images after preprocessing under the name of the image without the extension
-    growth_area_coordinates : numpy array
-        Contains the coordinates of the growth areas in the images
-    raw_areas_df : pandas dataframe
-        The dataframe containing the areas of the growth areas
-    processed_data_df : pandas dataframe
-        The dataframe containing the processed data (DI and FoG)
-    output_path : str
-        The path to the directory in which the preprocessed images will be saved
-    
-    Returns
-    -------
-    Boolean
-        True if the images were saved successfully, False otherwise
-    '''
-
-    # Index the raw_areas_df by the file name, row index, and column index
-    indexed_raw_areas_df = raw_areas_df.set_index(['file_name', 'row_index', 'column_index'])
-
-    # Overlay a grid on the images for visualizing the areas in which the calculations are done
-    for image_name ,image in organized_images.items():
-
-        # Copy the image to avoid modifying the original image
-        image = image.copy()
-
-        
-        border_color = (255, 255, 255)
-        border_thickness = 2
-        
-        # Full plate
-        for row_index, coordintes_row in enumerate(growth_area_coordinates):
-            for column_index, coordinte in enumerate(coordintes_row):
-
-                curr_colony_size = indexed_raw_areas_df.xs((image_name, row_index, column_index), level=['file_name', 'row_index', 'column_index'])['area'].values[0]
-                                
-                start_point = (coordinte["start_x"], coordinte["start_y"])
-                end_point = (coordinte["end_x"], coordinte["end_y"])
-                image = cv2.rectangle(image, start_point, end_point, border_color, border_thickness)
-
-                # Add the colony size and indexes to the bottom left corner of the rectangle
-                cv2.putText(image, f'{curr_colony_size:.0f}', (coordinte["start_x"] + 5, coordinte["start_y"] + 45), cv2.FONT_HERSHEY_COMPLEX, 0.5, border_color, 1)
-
-        # Individual growth areas by origin well
-
-
-        # Save the result image
-        cv2.imwrite(f'{output_path}/{image_name}.png', image)
-    
-    return True
 
 
 def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, plate_num, DI_cutoff):
@@ -1246,6 +1343,7 @@ def generate_test_images(save_path, start_row, start_column):
     cv2.imwrite(os.path.join(save_path ,'test_48hr_1-4.png'), img_48hr)
     cv2.imwrite(os.path.join(save_path ,'test_48hr_5-8.png'), img_48hr)
     cv2.imwrite(os.path.join(save_path ,'test_48hr_9-12.png'), img_48hr)
+
 
 if __name__ == "__main__":
     main()
