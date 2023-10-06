@@ -67,6 +67,7 @@ def main():
     # Create the output directories
     output_dir_images = create_directory(input_path, f'ISO_PL_{plate_num}_preproccesed_images')
     QC_dir = create_directory(input_path, f'QC_ISO_PL_{plate_num}')
+    QC_individual_wells_dir = create_directory(QC_dir, 'individual_wells')
     # Create the output directories for the processed data
     output_dir_processed_data = create_directory(input_path, f'ISO_PL_{plate_num}_processed_data')
     output_dir_graphs = create_directory(input_path, f'ISO_PL_{plate_num}_graphs')
@@ -131,7 +132,7 @@ def main():
 
     processed_data_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
 
-    generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, plate_format, QC_dir)
+    generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, plate_format, QC_dir, QC_individual_wells_dir)
 
     create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, prefix_name, plate_num, DI_cutoff)
 
@@ -976,7 +977,7 @@ def make_four_picture_grid(top_left, top_right, bottom_left, bottom_right):
     return joined_picutres
 
 
-def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, plate_format, output_path):
+def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, plate_format, output_path, QC_individual_wells_dir):
     '''
     Description
     -----------
@@ -994,6 +995,8 @@ def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, 
         The dataframe containing the processed data (DI and FoG)
     output_path : str
         The path to the directory in which the preprocessed images will be saved
+    QC_individual_wells_dir : str
+        The path to the directory in which the QC images of the individual wells will be saved
     
     Returns
     -------
@@ -1040,11 +1043,11 @@ def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, 
     for origin_row, origin_column in origin_wells:
         for division in text_division_of_origin_96_well_plate:
             well_areas = get_image_part_for_origin_well(images_with_growth_data, division, origin_row, origin_column, growth_area_coordinates, plate_format)
-            
+
             all_areas = make_four_picture_grid(well_areas['24hr_ND'], well_areas['48hr_ND'], well_areas['24hr'], well_areas['48hr'])
 
             # Save the result image
-            cv2.imwrite(f'{output_path}/{image_name}_{convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)}.png', all_areas)
+            cv2.imwrite(f'{QC_individual_wells_dir}/{image_name}_{convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)}.png', all_areas)
     
     return True
 
