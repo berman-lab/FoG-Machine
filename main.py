@@ -4,10 +4,10 @@ import json
 import pathlib
 import argparse
 import itertools
+import matplotlib
 import numpy as np
 import pandas as pd
 import scienceplots
-import seaborn as sns
 import matplotlib.pyplot as plt
 
 
@@ -91,7 +91,7 @@ def main():
     active_divisions = check_active_divisions(input_images, text_division_of_origin_96_well_plate)
 
 
-    organized_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name, colony_threshold, plate_format, output_dir_images)
+    organized_images, trimmed_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name, colony_threshold, plate_format, output_dir_images)
 
 
     # Get the areas in the experiment plates
@@ -111,9 +111,9 @@ def main():
 
 
     # Calculate the DI (Distance of Inhibition) for each strain
-    DI_df = calculate_DI(raw_areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate, active_divisions)
+    DI_df = create_DI_df(raw_areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate, active_divisions)
     
-    FoG_df = calculate_FoG(raw_areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions)
+    FoG_df = create_FoG_df(raw_areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions)
 
     # Merge the DI (Distance of Inhibition) and FoG dataframes on row_index, column_index
     processed_data_df = pd.merge(DI_df, FoG_df, on=['row_index', 'column_index', 'file_name_24hr'])
@@ -132,9 +132,11 @@ def main():
 
     processed_data_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
 
-    generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, plate_format, QC_dir, QC_individual_wells_dir)
+    generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, active_divisions, plate_format, QC_dir, QC_individual_wells_dir)
 
     create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, prefix_name, plate_num, DI_cutoff)
+
+    create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, output_dir_graphs, plate_format, active_divisions)
 
 
 def get_files_from_directory(path , extension):
@@ -250,6 +252,7 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
     '''
 
     organized_images = {}
+    cropped_images = {}
 
     for picture in input_images:
         picture_name = pathlib.Path(picture).stem.lower()
@@ -299,6 +302,9 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         if len(picture_name.split('nd')) > 1:
             current_image_name += "_ND"
         
+        # Save the trimmed image
+        cropped_images[current_image_name] = cropped_image
+
         cropped_image = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2GRAY)
         mask = cropped_image > colony_threshold
         cropped_image[mask] = 255
@@ -306,7 +312,7 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         organized_images[current_image_name] = cropped_image
         cv2.imwrite(os.path.join(output_path, current_image_name + ".png"), cropped_image)
 
-    return organized_images
+    return organized_images, cropped_images
 
 
 def get_growth_areas_coordinates(plate_format):
@@ -505,7 +511,55 @@ def get_distance_from_strip(column_index, plate_format):
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def calculate_DI(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate, active_divisions):
+def calculate_DI(areas_df,control_plate_24hr_ND_name, experiment_plate_24hr_name, origin_well_row, origin_well_column, plate_format, DI_cutoff):
+    '''
+    Description
+    -----------
+    Calculate the DI (Distance of inhibition) a given strain
+
+    Parameters
+    ----------
+    areas_df : pandas dataframe
+        The dataframe containing the areas of the growth areas
+    control_plate_24hr_ND_name : str
+        The name of the control plate with no drug at 24 hours
+    experiment_plate_24hr_name : str
+        The name of the experiment plate at 24 hours
+    origin_well_row : int
+        The row index of the well from which the growth area was taken
+    origin_well_column : int
+        The column index of the well from which the growth area was taken
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+    DI_cutoff : float
+        The cutoff for the DI - should be given as a number between 0 and 1
+
+    Returns
+    -------
+    DI_from_strip : int
+        The distance if such an index with the given cutoff exists, -1 otherwise
+    '''
+    experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
+    ND_df_rows_24hr = get_plate_growth_area_sizes(areas_df, control_plate_24hr_ND_name, experiment_well_indexes, plate_format)
+    ND_mean_24hr = ND_df_rows_24hr.area.mean()
+
+    # Find the DI (Distance of Inhibition) by finding the first growth area that has a mean of less than ND_mean * DI_cutoff
+    exp_growth_area_sizes = get_plate_growth_area_sizes(areas_df, experiment_plate_24hr_name, experiment_well_indexes, plate_format)
+
+    # We need to reverse the list since we always want the list to have the colonies closest to the strip at the end.
+    exp_mean_growth_by_distance_from_strip = exp_growth_area_sizes.groupby('distance_from_strip')['area'].mean().values[::-1]
+
+    # Find the first growth area that has a mean of less than ND_mean * DI_cutoff
+    DI_from_strip = -1
+    for i, growth_area_size in enumerate(exp_mean_growth_by_distance_from_strip):
+        if growth_area_size < ND_mean_24hr * DI_cutoff:
+            DI_from_strip = i
+            break
+
+    return DI_from_strip
+
+
+def create_DI_df(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate, active_divisions):
     '''
     Description
     -----------
@@ -564,31 +618,12 @@ def calculate_DI(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_w
             experiment_plate_24hr = plates['24hr']
 
             for (origin_well_row, origin_well_column) in origin_wells:
-                
-                # Get the indexes of the growth areas in the experiment plate
-                experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
-
-                ND_df_rows_24hr = get_plate_growth_area_sizes(areas_df, control_plate_24hr_ND, experiment_well_indexes, plate_format)
-                ND_mean_24hr = ND_df_rows_24hr.area.mean()
-
-                # Find the DI (Distance of Inhibition) by finding the first growth area that has a mean of less than ND_mean * DI_cutoff
-                exp_growth_area_sizes = get_plate_growth_area_sizes(areas_df, experiment_plate_24hr, experiment_well_indexes, plate_format)
-
-                # We need to reverse the list since we always want the list to have the colonies closest to the strip at the end.
-                exp_mean_growth_by_distance_from_strip = exp_growth_area_sizes.groupby('distance_from_strip')['area'].mean().values[::-1]
-
-                # Find the first growth area that has a mean of less than ND_mean * DI_cutoff
-                DI_distance_from_strip = -1
-                for i, growth_area_size in enumerate(exp_mean_growth_by_distance_from_strip):
-                    if growth_area_size < ND_mean_24hr * DI_cutoff:
-                        DI_distance_from_strip = i
-                        break
-                
-                # Add the file name, origin row and column indexes, and the DI
+                DI_from_strip = calculate_DI(areas_df, control_plate_24hr_ND, experiment_plate_24hr, origin_well_row, origin_well_column, plate_format, DI_cutoff)
+        
                 file_names.append(experiment_plate_24hr)
                 origin_row_indexes.append(origin_well_row)
                 origin_column_indexes.append(origin_well_column)
-                DIs.append(DI_distance_from_strip)
+                DIs.append(DI_from_strip)
 
         # Create the dataframe
         DI_df = pd.DataFrame({'file_name_24hr': file_names,
@@ -753,7 +788,7 @@ def get_plate_growth_area_sizes(areas_df, plate_name, experiment_well_indexes, p
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def calculate_FoG(areas_df, FoG_df, plate_format, text_division_of_origin_96_well_plate, active_divisions):
+def create_FoG_df(areas_df, FoG_df, plate_format, text_division_of_origin_96_well_plate, active_divisions):
     '''
     Description
     -----------
@@ -787,7 +822,6 @@ def calculate_FoG(areas_df, FoG_df, plate_format, text_division_of_origin_96_wel
 
     # Create lists to later be used for creating the dataframe
     file_names = []
-    # For later merge with the DI_df
     file_names_24hr = []
     origin_row_indexes = []
     origin_column_indexes = []
@@ -838,6 +872,7 @@ def calculate_FoG(areas_df, FoG_df, plate_format, text_division_of_origin_96_wel
                 if strain_DI == -1:
                     FoG = -1
                     file_names.append(experiment_plate_48hr)
+                    file_names_24hr.append(experiment_plate_24hr)
                     origin_row_indexes.append(origin_well_row)
                     origin_column_indexes.append(origin_well_column)
                     FoGs.append(FoG)
@@ -862,6 +897,7 @@ def calculate_FoG(areas_df, FoG_df, plate_format, text_division_of_origin_96_wel
                 origin_column_indexes.append(origin_well_column)
                 FoGs.append(FoG)
 
+        
         FoG_df = pd.DataFrame({'file_name_48hr': file_names,
                                 'file_name_24hr': file_names_24hr,
                                 'row_index': origin_row_indexes,
@@ -924,7 +960,7 @@ def get_column_offset(division):
     return offset
 
 
-def get_image_part_for_origin_well(organized_images, division, origin_row, origin_column, growth_area_coordinates, plate_format):
+def get_image_part_for_origin_well(trimmed_images, division, origin_row, origin_column, growth_area_coordinates, plate_format):
     '''
     Description
     -----------
@@ -954,7 +990,7 @@ def get_image_part_for_origin_well(organized_images, division, origin_row, origi
     
     image_parts = {}
 
-    plates = get_plates_by_division(division, organized_images.keys())
+    plates = get_plates_by_division(division, trimmed_images.keys())
 
     colony_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_row, origin_column, plate_format))
 
@@ -964,7 +1000,8 @@ def get_image_part_for_origin_well(organized_images, division, origin_row, origi
         end_row = growth_area_coordinates[colony_indexes[-1][0], colony_indexes[-1][0]]["end_y"]
         start_col = growth_area_coordinates[colony_indexes[0][0], colony_indexes[0][1]]["start_x"]
         end_col = growth_area_coordinates[colony_indexes[-1][0], colony_indexes[-1][1]]["end_x"]
-        image_parts[plate] = organized_images[plates[plate]][start_row:end_row, start_col:end_col]
+        # Copy to avoid modifying the original image
+        image_parts[plate] = trimmed_images[plates[plate]][start_row:end_row, start_col:end_col].copy()
 
     return image_parts
 
@@ -977,7 +1014,7 @@ def make_four_picture_grid(top_left, top_right, bottom_left, bottom_right):
     return joined_picutres
 
 
-def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, plate_format, output_path, QC_individual_wells_dir):
+def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, active_divisions, plate_format, output_path, QC_individual_wells_dir):
     '''
     Description
     -----------
@@ -993,10 +1030,16 @@ def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, 
         The dataframe containing the areas of the growth areas
     processed_data_df : pandas dataframe
         The dataframe containing the processed data (DI and FoG)
+    text_division_of_origin_96_well_plate : list str
+        The text division of the original plate layout that the images were generated from (['1-4', '5-8', '9-12'])
+    active_divisions : dict
+        Indicates which divisions have been used in the experiment
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
     output_path : str
-        The path to the directory in which the preprocessed images will be saved
+        The path to the directory in which the images will be saved
     QC_individual_wells_dir : str
-        The path to the directory in which the QC images of the individual wells will be saved
+        The path to the directory in which the images of the individual wells will be saved
     
     Returns
     -------
@@ -1042,6 +1085,10 @@ def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, 
 
     for origin_row, origin_column in origin_wells:
         for division in text_division_of_origin_96_well_plate:
+
+            if not active_divisions[f'is_{division}_active']:
+                continue
+
             well_areas = get_image_part_for_origin_well(images_with_growth_data, division, origin_row, origin_column, growth_area_coordinates, plate_format)
 
             all_areas = make_four_picture_grid(well_areas['24hr_ND'], well_areas['48hr_ND'], well_areas['24hr'], well_areas['48hr'])
@@ -1123,6 +1170,139 @@ def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, plate_nu
     
     plt.tight_layout()
     plt.savefig(os.path.join(graphs_dir, f'{prefix_name}_{plate_num}_FoG_and_{DI_cutoff_text.replace(" " , "_")}_hist.png'), dpi=500)
+
+
+def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_96_well_plate, graphs_dir, plate_format, active_divisions):
+    '''
+    Description
+    -----------
+    Create graphs of the distance from the strip vs colony size
+
+    Parameters
+    ----------
+    trimmed_images : dict
+        A dictionary containing the images after trimming so only the growth areas remain
+    growth_area_coordinates : numpy array
+        Contains the coordinates of the growth areas in the images
+    raw_areas_df : pandas dataframe
+        The dataframe containing the areas of the colonies
+    processed_data_df : pandas dataframe
+        The dataframe containing the processed data (DI and FoG)
+    text_division_of_96_well_plate : list str
+        The text division of the original plate layout that the images were generated from (['1-4', '5-8', '9-12'])
+    graphs_dir : str
+        The path to the directory in which the graphs will be saved
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+    active_divisions : dict
+        Indicates which divisions have been used in the experiment
+    
+    Returns
+    -------
+    None
+    '''
+
+    # Use Agg backend to avoid displaying the figures and lower RAM usage
+    matplotlib.use("Agg")
+
+    origin_wells = create_32_well_plate_layout()
+
+    colors = ['#E63B60', '#067FD0', '#223BC9', '#151A7B']
+
+    for origin_row, origin_column in origin_wells:
+        for division in text_division_of_96_well_plate:
+            
+            if not active_divisions[f'is_{division}_active']:
+                continue
+
+            plates = get_plates_by_division(division, trimmed_images.keys())
+            well_areas = get_image_part_for_origin_well(trimmed_images, division, origin_row, origin_column, growth_area_coordinates, plate_format)
+            area_coordinates_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_row, origin_column, plate_format))
+
+            # Check if need to flip image horizontally so it will be in the same orientation as the other images - strip on the right 
+            if origin_column in [0, 2, 4, 6, 8, 10]:
+                well_areas['24hr'] = cv2.flip(well_areas['24hr'], 1)
+                well_areas['48hr'] = cv2.flip(well_areas['48hr'], 1)
+
+            well_areas['24hr'] = cv2.cvtColor(well_areas['24hr'], cv2.COLOR_BGR2RGB)
+            well_areas['48hr'] = cv2.cvtColor(well_areas['48hr'], cv2.COLOR_BGR2RGB)
+
+            # Prep the 24hr raw colony sizes by distance from strip for plotting
+            colony_sizes_24hr = get_plate_growth_area_sizes(raw_areas_df, plates['24hr'],
+                                                                area_coordinates_indexes, plate_format).groupby('row_index')
+            
+            colony_sizes_48hr = get_plate_growth_area_sizes(raw_areas_df, plates['48hr'],
+                                                                area_coordinates_indexes, plate_format).groupby('row_index')
+
+
+            # Get the DI 80, 50 and 20 for the current strain
+            # 80% inhibition - need to find the area at which the colony size is 20% of the original size. Therefore provide 1 - %inihibition as the DI cutoff
+            strain_DI_80 = calculate_DI(raw_areas_df, plates['24hr_ND'], plates['24hr'], origin_row, origin_column, plate_format, 0.2)
+                                
+            
+            # 50% inhibition - need to find the area at which the colony size is 50% of the original size. Therefore provide 1 - %inihibition as the DI cutoff
+            strain_DI_50 = int(processed_data_df.loc[(processed_data_df.file_name_24hr == plates['24hr']) &
+                                        (processed_data_df.row_index == origin_row) &
+                                        (processed_data_df.column_index == origin_column), 'DI'].values[0])
+
+            # 20% inhibition - need to find the area at which the colony size is 80% of the original size. Therefore provide 1 - %inihibition as the DI cutoff
+            strain_DI_20 = calculate_DI(raw_areas_df, plates['24hr_ND'], plates['24hr'], origin_row, origin_column, plate_format, 0.8)
+
+
+            fig, ax = plt.subplots(2, 2, figsize=(15, 9))
+            # Set the title of the graph
+            fig.suptitle(f'Colony size vs distance from strip for {convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)} plate {division}', fontsize=16)
+
+            ax[0, 0].set_title('24hr')
+            ax[0, 0].set_ylabel('Colony size [pixels]')
+            ax[0, 0].set_xlabel('Distance from strip')
+            ax[0, 0].yaxis.set_ticks_position('left')
+            ax[0, 0].xaxis.set_ticks_position('bottom')
+            
+
+            ax[0, 1].set_title('48hr')
+            ax[0, 1].set_ylabel('Colony size [pixels]')
+            ax[0, 1].set_xlabel('Distance from strip')
+            ax[0, 1].yaxis.set_ticks_position('left')
+            ax[0, 1].xaxis.set_ticks_position('bottom')
+
+            ax[1, 0].set_title('24hr all colonies')
+            # Remove grid lines, ticks, tick labels and all spines
+            ax[1, 0].grid(False)
+            ax[1, 0].set_xticks([])
+            ax[1, 0].set_yticks([])
+
+            ax[1, 1].set_title('48hr all colonies')
+            ax[1, 1].grid(False)
+            ax[1, 1].set_xticks([])
+            ax[1, 1].set_yticks([])
+
+
+            for row_index, row_data in enumerate(colony_sizes_24hr):
+                ax[0,0].plot(row_data[1]['distance_from_strip'][::-1], row_data[1]['area'], label=f'Row {row_index + 1}', color=colors[row_index])
+
+            
+            for row_index, row_data in enumerate(colony_sizes_48hr):
+                ax[0,1].plot(row_data[1]['distance_from_strip'][::-1], row_data[1]['area'], label=f'Row {row_index + 1}', color=colors[row_index])
+
+            # add DIs to plots
+            for row_index, column_index in [(0, 0), (0, 1)]:
+                if strain_DI_20 != -1:
+                    ax[row_index, column_index].axvline(x=strain_DI_20, color='#FA8072', linestyle='--', label=f'DI_20%={strain_DI_20}')
+                if strain_DI_50 != -1:
+                    ax[row_index, column_index].axvline(x=strain_DI_50, color='#B22222', linestyle=':', label=f'DI_50%={strain_DI_50}')
+                if strain_DI_80 != -1:
+                    ax[row_index, column_index].axvline(x=strain_DI_80, color='#7C0A02', linestyle='-.', label=f'DI_80%={strain_DI_80}')
+                
+            ax[1, 0].imshow(well_areas['24hr'])
+            ax[1, 1].imshow(well_areas['48hr'])
+
+            legend_transperancy = 0.8
+            ax[0, 0].legend(loc='upper right', framealpha=legend_transperancy)
+            ax[0, 1].legend(loc='upper right', framealpha=legend_transperancy)
+
+            plt.savefig(os.path.join(graphs_dir, f'{convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)}_distance_vs_colony_size.png'), dpi=200)
+            plt.close('all')
 
 
 def generate_test_images(save_path, start_row, start_column):
