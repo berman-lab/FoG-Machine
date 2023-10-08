@@ -136,7 +136,7 @@ def main():
 
     create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, prefix_name, plate_num, DI_cutoff)
 
-    create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, output_dir_graphs, plate_format, active_divisions)
+    create_distance_from_strip_vs_colony_size_graphs(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, output_dir_graphs, plate_format, active_divisions)
 
 
 def get_files_from_directory(path , extension):
@@ -1249,7 +1249,7 @@ def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area
             strain_DI_20 = calculate_DI(raw_areas_df, plates['24hr_ND'], plates['24hr'], origin_row, origin_column, plate_format, 0.8)
 
 
-            fig, ax = plt.subplots(2, 2, figsize=(15, 9))
+            fig, ax = plt.subplots(2, 2, figsize=(16, 9))
             # Set the title of the graph
             fig.suptitle(f'Colony size vs distance from strip for {convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)} plate {division}', fontsize=16)
 
