@@ -1162,11 +1162,11 @@ def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, plate_nu
     fig, ax = plt.subplots(2, 1, figsize=(10, 10))
     
     # Create the FoG histogram
-    create_hist(processed_data_df.FoG, ax[0], f'FoG distrobution for {prefix_name} {plate_num}', 'FoG')
+    create_hist(processed_data_df.FoG, ax[0], f'FoG distribution for {prefix_name} {plate_num}', 'FoG')
 
     # Create the DI histogram
     DI_cutoff_text = f'DI {DI_cutoff * 100:.2f}%'
-    create_hist(processed_data_df.DI, ax[1], f'Distance of inhibition (DI) distrobution for {prefix_name} {plate_num}', DI_cutoff_text)
+    create_hist(processed_data_df.DI, ax[1], f'Distance of inhibition (DI) distribution for {prefix_name} {plate_num}', DI_cutoff_text)
     
     plt.tight_layout()
     plt.savefig(os.path.join(graphs_dir, f'{prefix_name}_{plate_num}_FoG_and_{DI_cutoff_text.replace(" " , "_")}_hist.png'), dpi=500)
