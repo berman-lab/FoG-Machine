@@ -1297,9 +1297,7 @@ def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area
             ax[1, 0].imshow(well_areas['24hr'])
             ax[1, 1].imshow(well_areas['48hr'])
 
-            legend_transperancy = 0.8
-            ax[0, 0].legend(loc='upper right', framealpha=legend_transperancy)
-            ax[0, 1].legend(loc='upper right', framealpha=legend_transperancy)
+            ax[0, 1].legend(loc='upper left', framealpha=0.8, bbox_to_anchor=(1.04, 1))
 
             plt.savefig(os.path.join(graphs_dir, f'{convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)}_distance_vs_colony_size.png'), dpi=200)
             plt.close('all')
