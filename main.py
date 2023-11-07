@@ -96,9 +96,9 @@ def main():
 
     # Get the areas in the experiment plates
     growth_area_coordinates = get_growth_areas_coordinates(plate_format)
-    # Save growth areas in excel file
+    # Save growth areas in csv file
     growth_areas_df = pd.DataFrame(growth_area_coordinates.reshape(-1, 1), columns=['growth_areas'])
-    growth_areas_df.to_excel(os.path.join(QC_dir, f'ISO_PL_{plate_num}_growth_areas.xlsx'), index=False)
+    growth_areas_df.to_csv(os.path.join(QC_dir, f'ISO_PL_{plate_num}_growth_areas.xlsx'), index=False)
 
 
     calculated_areas = {}
@@ -107,7 +107,7 @@ def main():
         calculated_areas[image_name] = image_areas[image_name]
 
     raw_areas_df = organize_raw_data(calculated_areas, plate_format)
-    raw_areas_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.xlsx'), index=False)
+    raw_areas_df.to_csv(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.xlsx'), index=False)
 
 
     # Calculate the DI (Distance of Inhibition) for each strain
@@ -130,7 +130,7 @@ def main():
     # Set column order to file_name_24hr, file_name_48hr, row_index, column_index, DI, FoG, media, temprature, drug, plate_format
     processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'origin_well', 'row_index', 'column_index', 'DI', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
 
-    processed_data_df.to_excel(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
+    processed_data_df.to_csv(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
 
     generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, active_divisions, plate_format, QC_dir, QC_individual_wells_dir)
 
