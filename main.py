@@ -18,8 +18,8 @@ def main():
     # Set up the argument parser
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--path', help='The path to the pictures directory', required=True)
-    parser.add_argument('-pn', '--prefix_name', help='A prefix to add to the name of the output files', default="")
-    parser.add_argument('-n', '--number', help='The plate number', default=1)
+    parser.add_argument('-bn', '--base_name', help='A prefix to add to the name of the output files', required=True)
+    parser.add_argument('-n', '--number', help='The plate number', default='')
     parser.add_argument('-f', '--format', help='The layout of colonies of the plate (384, 1536)', required=True)
 
     parser.add_argument('-m', '--media', help='The growth nedia on which the experiment was done', required=True)
@@ -29,8 +29,8 @@ def main():
 
     args = parser.parse_args()
     input_path = os.path.normcase(args.path)
-    prefix_name = args.prefix_name
-    plate_num = int(args.number)
+    base_name = args.base_name
+    plate_num = args.number
     plate_format = int(args.format)
 
     media = args.media
@@ -61,28 +61,26 @@ def main():
 
     text_division_of_origin_96_well_plate = config["text_division_of_origin_96_well_plate"]
     # Distance of Inhibition cutoff
-    DI_cutoff = config["DI"]
+    DI_cutoffs = config["DI"]
     colony_threshold = config["CT"]
     
     # Create the output directories
-    output_dir_images = create_directory(input_path, f'ISO_PL_{plate_num}_preproccesed_images')
-    QC_dir = create_directory(input_path, f'QC_ISO_PL_{plate_num}')
+    output_dir_segmented_images = create_directory(input_path, f'{base_name}_images_segmented')
+    output_dir_cropped_images = create_directory(input_path, f'{base_name}_images_cropped')
+    QC_dir = create_directory(input_path, f'{base_name}_QC')
     QC_individual_wells_dir = create_directory(QC_dir, 'individual_wells')
     # Create the output directories for the processed data
-    output_dir_processed_data = create_directory(input_path, f'ISO_PL_{plate_num}_processed_data')
-    output_dir_graphs = create_directory(input_path, f'ISO_PL_{plate_num}_graphs')
+    output_dir_processed_data = create_directory(input_path, f'{base_name}_processed_data')
+    output_dir_graphs = create_directory(input_path, f'{base_name}_graphs')
 
-    save_run_parameters(QC_dir, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold)
+    save_run_parameters(QC_dir, input_path, base_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold)
 
     
-    # This is slightly dirty but it is the easiest and won't require changes if someone wants to use tests
+    # This is slightly dirty but it is the easiest and won't require changes if someone wants to use the tests
     # Make sure not to have any files in the input directory for this option
     if 'simple_tests' in input_path:
         generate_test_images(input_path, start_row, start_col)
 
-
-    input_images = get_files_from_directory(input_path , '.png')
-    organized_images = {}
 
     # Get the images from the input directory 
     input_images = get_files_from_directory(input_path , '.png')
@@ -91,14 +89,15 @@ def main():
     active_divisions = check_active_divisions(input_images, text_division_of_origin_96_well_plate)
 
 
-    organized_images, trimmed_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name, colony_threshold, plate_format, output_dir_images)
+    organized_images, trimmed_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, base_name, media, temprature, plate_num, drug_name, colony_threshold,
+                                                         plate_format, output_dir_segmented_images, output_dir_cropped_images)
 
 
     # Get the areas in the experiment plates
     growth_area_coordinates = get_growth_areas_coordinates(plate_format)
     # Save growth areas in csv file
     growth_areas_df = pd.DataFrame(growth_area_coordinates.reshape(-1, 1), columns=['growth_areas'])
-    growth_areas_df.to_csv(os.path.join(QC_dir, f'ISO_PL_{plate_num}_growth_areas.xlsx'), index=False)
+    growth_areas_df.to_csv(os.path.join(QC_dir, f'ISO_PL_{plate_num}_growth_areas.csv'), index=False)
 
 
     calculated_areas = {}
@@ -107,11 +106,11 @@ def main():
         calculated_areas[image_name] = image_areas[image_name]
 
     raw_areas_df = organize_raw_data(calculated_areas, plate_format)
-    raw_areas_df.to_csv(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.xlsx'), index=False)
+    raw_areas_df.to_csv(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.csv'), index=False)
 
 
     # Calculate the DI (Distance of Inhibition) for each strain
-    DI_df = create_DI_df(raw_areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate, active_divisions)
+    DI_df = create_DI_df(raw_areas_df, plate_format, DI_cutoffs, text_division_of_origin_96_well_plate, active_divisions)
     
     FoG_df = create_FoG_df(raw_areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions)
 
@@ -130,11 +129,11 @@ def main():
     # Set column order to file_name_24hr, file_name_48hr, row_index, column_index, DI, FoG, media, temprature, drug, plate_format
     processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'origin_well', 'row_index', 'column_index', 'DI', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
 
-    processed_data_df.to_csv(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.xlsx'), index=False)
+    processed_data_df.to_csv(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.csv'), index=False)
 
     generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, active_divisions, plate_format, QC_dir, QC_individual_wells_dir)
 
-    create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, prefix_name, plate_num, DI_cutoff)
+    create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, base_name, plate_num, DI_cutoffs)
 
     create_distance_from_strip_vs_colony_size_graphs(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, output_dir_graphs, plate_format, active_divisions)
 
@@ -210,7 +209,8 @@ def check_active_divisions(input_images, text_division_of_origin_96_well_plate):
     return active_divisions
 
 
-def preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name ,colony_threshold, plate_format, output_path):
+def preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name ,colony_threshold, plate_format,
+                      output_path_segmented_images, output_path_cropped_images):
     '''
     Description
     -----------
@@ -242,8 +242,10 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         The threshold used for determining if a pixel is part of a colony or not
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
-    output_path : str
-        The path to the directory in which the preprocessed images will be saved
+    output_path_segmented_images : str
+        The path to the directory in which the segmented images will be saved
+    output_path_cropped_images : str
+        The path to the directory in which the cropped images will be saved
 
     Returns
     -------
@@ -251,13 +253,13 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         A dictionary containing the images after preprocessing under the name of the image without the extension
     '''
 
-    organized_images = {}
+    segmented_images = {}
     cropped_images = {}
 
-    for picture in input_images:
-        picture_name = pathlib.Path(picture).stem.lower()
+    for picture_path in input_images:
+        picture_name = pathlib.Path(picture_path).stem.lower()
 
-        image = cv2.imread(picture)
+        image = cv2.imread(picture_path)
 
         # Make sure the image aspect ratio is 4:3 (width:height)
         if image.shape[1] / image.shape[0] != 4/3:
@@ -271,16 +273,21 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         if image.shape != (3096, 4128, 3):
             image = cv2.resize(image, (4128, 3096))
 
-        # Crop the image
-        # start_row:end_row, start_col:end_col
+        # Crop the image. Crop order as spcified below
         cropped_image = image[start_row:end_row, start_col:end_col]
         
+        # Get the origin well numbers to later on put them in the file name
+        numbers = ''
+
         if '1-4' in picture_name:
             numbers = [1, 2, 3, 4]
         elif '5-8' in picture_name:
             numbers = [5, 6, 7, 8]
         elif '9-12' in picture_name:
             numbers = [9, 10, 11, 12]
+        # if there are only two images then the user shouldn't have to specify the wells the images are from
+        elif len(input_images) == 2:
+            pass
         else:
             print(f"file {picture_name} does not contain the numbers in the name")
             return ValueError('The numbers are not specified in the picture name in a supported format. 1-4, 5-8 or 9-12 should be in the name')
@@ -296,8 +303,11 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
             print(f"file {picture_name} does not contain the time in the name")
             return ValueError('The time is not specified in the picture name in a supported format. HOURS or hr should be in the name')
 
-        current_image_name = f'{prefix_name}_{plate_num}_{plate_format}_{media}_{temprature}_{drug_name}_{time}_{numbers[0]}-{numbers[-1]}'
-        
+        if numbers != '':
+            current_image_name = f'{prefix_name}_{plate_num}_{plate_format}_{media}_{temprature}_{drug_name}_{time}_{numbers[0]}-{numbers[-1]}'
+        else:
+            current_image_name = f'{prefix_name}_{plate_num}_{plate_format}_{media}_{temprature}_{drug_name}_{time}'
+
         # If the plate has no drug, add ND to the name
         if len(picture_name.split('nd')) > 1:
             current_image_name += "_ND"
@@ -305,14 +315,19 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         # Save the trimmed image
         cropped_images[current_image_name] = cropped_image
 
-        cropped_image = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2GRAY)
-        mask = cropped_image > colony_threshold
-        cropped_image[mask] = 255
-        cropped_image[~mask] = 0
-        organized_images[current_image_name] = cropped_image
-        cv2.imwrite(os.path.join(output_path, current_image_name + ".png"), cropped_image)
+        # Make a copy of the image to avoid changing the original, then segment the image
+        segmented_image = cropped_image.copy()
+        
+        segmented_image = cv2.cvtColor(segmented_image, cv2.COLOR_BGR2GRAY)
+        T, segmented_image = cv2.threshold(segmented_image,0,255,cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    return organized_images, cropped_images
+        segmented_images[current_image_name] = segmented_image
+
+        # Save the images
+        cv2.imwrite(os.path.join(output_path_segmented_images, current_image_name + ".png"), segmented_image)
+        cv2.imwrite(os.path.join(output_path_cropped_images, current_image_name + ".png"), cropped_image)
+
+    return segmented_images, cropped_images
 
 
 def get_growth_areas_coordinates(plate_format):

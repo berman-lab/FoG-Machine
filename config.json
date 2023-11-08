@@ -13,6 +13,5 @@
     },
     "text_division_of_origin_96_well_plate": ["1-4", "5-8", "9-12"],
     "numaric_division_of_origin_96_well_plate": [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]],
-    "DI": 0.5,
-    "CT": 110
+    "DI": [0.2, 0.5, 0.8]
 }
