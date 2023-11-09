@@ -19,8 +19,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--path', help='The path to the pictures directory', required=True)
     parser.add_argument('-bn', '--base_name', help='A prefix to add to the name of the output files', required=True)
-    parser.add_argument('-n', '--number', help='The plate number', default='')
     parser.add_argument('-f', '--format', help='The layout of colonies of the plate (384, 1536)', required=True)
+    parser.add_argument('-nd', '--is_ND', help='is there an ND plate included in the experiment', default=False ,action='store_true')
 
     parser.add_argument('-m', '--media', help='The growth nedia on which the experiment was done', required=True)
     parser.add_argument('-t', '--temperature', help='The incubation temperature in celsius', required=True)
@@ -30,8 +30,8 @@ def main():
     args = parser.parse_args()
     input_path = os.path.normcase(args.path)
     base_name = args.base_name
-    plate_num = args.number
     plate_format = int(args.format)
+    is_ND = args.is_ND
 
     media = args.media
     temprature = args.temperature
@@ -62,7 +62,6 @@ def main():
     text_division_of_origin_96_well_plate = config["text_division_of_origin_96_well_plate"]
     # Distance of Inhibition cutoff
     DI_cutoffs = config["DI"]
-    colony_threshold = config["CT"]
     
     # Create the output directories
     output_dir_segmented_images = create_directory(input_path, f'{base_name}_images_segmented')
@@ -73,7 +72,7 @@ def main():
     output_dir_processed_data = create_directory(input_path, f'{base_name}_processed_data')
     output_dir_graphs = create_directory(input_path, f'{base_name}_graphs')
 
-    save_run_parameters(QC_dir, input_path, base_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold)
+    save_run_parameters(QC_dir, input_path, base_name, media, temprature, drug_name, plate_format)
 
     
     # This is slightly dirty but it is the easiest and won't require changes if someone wants to use the tests
@@ -89,7 +88,7 @@ def main():
     active_divisions = check_active_divisions(input_images, text_division_of_origin_96_well_plate)
 
 
-    organized_images, trimmed_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, base_name, media, temprature, plate_num, drug_name, colony_threshold,
+    segmented_images, trimmed_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, base_name, media, temprature, drug_name,
                                                          plate_format, output_dir_segmented_images, output_dir_cropped_images)
 
 
@@ -97,16 +96,23 @@ def main():
     growth_area_coordinates = get_growth_areas_coordinates(plate_format)
     # Save growth areas in csv file
     growth_areas_df = pd.DataFrame(growth_area_coordinates.reshape(-1, 1), columns=['growth_areas'])
-    growth_areas_df.to_csv(os.path.join(QC_dir, f'ISO_PL_{plate_num}_growth_areas.csv'), index=False)
+    growth_areas_df.to_csv(os.path.join(QC_dir, f'{base_name}_growth_areas.csv'), index=False)
 
 
     calculated_areas = {}
-    for image_name, image in organized_images.items():
+    for image_name, image in segmented_images.items():
         image_areas = calculate_growth_in_areas(image_name ,image, growth_area_coordinates)
         calculated_areas[image_name] = image_areas[image_name]
 
+    
+    calculated_intesities = {}
+    for image_name, image in trimmed_images.items():
+        current_image_intensities = calculate_intesity_in_areas(image_name ,image, segmented_images[image_name] ,growth_area_coordinates, calculated_areas[image_name])
+        calculated_intesities[image_name] = current_image_intensities[image_name]
+
+
     raw_areas_df = organize_raw_data(calculated_areas, plate_format)
-    raw_areas_df.to_csv(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_raw_data.csv'), index=False)
+    raw_areas_df.to_csv(os.path.join(output_dir_processed_data, f'{base_name}_raw_data.csv'), index=False)
 
 
     # Calculate the DI (Distance of Inhibition) for each strain
@@ -129,13 +135,13 @@ def main():
     # Set column order to file_name_24hr, file_name_48hr, row_index, column_index, DI, FoG, media, temprature, drug, plate_format
     processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'origin_well', 'row_index', 'column_index', 'DI', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
 
-    processed_data_df.to_csv(os.path.join(output_dir_processed_data, f'ISO_PL_{plate_num}_summary_data.csv'), index=False)
+    processed_data_df.to_csv(os.path.join(output_dir_processed_data, f'{base_name}_summary_data.csv'), index=False)
 
-    generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, active_divisions, plate_format, QC_dir, QC_individual_wells_dir)
+    generate_qc_images(segmented_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, active_divisions, plate_format, QC_dir, QC_individual_wells_dir)
 
-    create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, base_name, plate_num, DI_cutoffs)
+    create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, base_name, DI_cutoffs)
 
-    create_distance_from_strip_vs_colony_size_graphs(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, output_dir_graphs, plate_format, active_divisions)
+    create_distance_from_strip_vs_colony_size_graphs(segmented_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, output_dir_graphs, plate_format, active_divisions)
 
 
 def get_files_from_directory(path , extension):
@@ -168,16 +174,14 @@ def create_directory(parent_directory, nested_directory_name):
     return new_dir_path
 
 
-def save_run_parameters(output_dir_processed_data, input_path, prefix_name, media, temprature, plate_num, drug_name, plate_format, colony_threshold):
-    with open(os.path.join(output_dir_processed_data, f'{prefix_name}_{plate_num}_run_parameters.txt'), 'w') as f:
+def save_run_parameters(output_dir_processed_data, input_path, prefix_name, media, temprature, drug_name, plate_format):
+    with open(os.path.join(output_dir_processed_data, f'{prefix_name}_run_parameters.txt'), 'w') as f:
         f.write(f'path: {input_path}\n')
         f.write(f'prefix_name: {prefix_name}\n')
         f.write(f'media: {media}\n')
         f.write(f'temprature: {temprature}\n')
-        f.write(f'plate_num: {plate_num}\n')
         f.write(f'drug_name: {drug_name}\n')
         f.write(f'plate_format: {plate_format}\n')
-        f.write(f'colony_threshold: {colony_threshold}\n')
 
 
 def check_active_divisions(input_images, text_division_of_origin_96_well_plate):
@@ -209,7 +213,7 @@ def check_active_divisions(input_images, text_division_of_origin_96_well_plate):
     return active_divisions
 
 
-def preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, plate_num, drug_name ,colony_threshold, plate_format,
+def preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, drug_name, plate_format,
                       output_path_segmented_images, output_path_cropped_images):
     '''
     Description
@@ -234,12 +238,8 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         The growth media used in the experiment
     temprature : int
         The incubation temprature in celsius
-    plate_num : int
-        The number of the plate from which the images were taken
     drug_name : str
         The name of the drug used in the experiment
-    colony_threshold : int
-        The threshold used for determining if a pixel is part of a colony or not
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
     output_path_segmented_images : str
@@ -304,9 +304,9 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
             return ValueError('The time is not specified in the picture name in a supported format. HOURS or hr should be in the name')
 
         if numbers != '':
-            current_image_name = f'{prefix_name}_{plate_num}_{plate_format}_{media}_{temprature}_{drug_name}_{time}_{numbers[0]}-{numbers[-1]}'
+            current_image_name = f'{prefix_name}_{plate_format}_{media}_{temprature}_{drug_name}_{time}_{numbers[0]}-{numbers[-1]}'
         else:
-            current_image_name = f'{prefix_name}_{plate_num}_{plate_format}_{media}_{temprature}_{drug_name}_{time}'
+            current_image_name = f'{prefix_name}_{plate_format}_{media}_{temprature}_{drug_name}_{time}'
 
         # If the plate has no drug, add ND to the name
         if len(picture_name.split('nd')) > 1:
@@ -426,6 +426,59 @@ def calculate_growth_in_areas(image_name, image, growth_areas):
             area_sizes[row_index, column_index] = np.count_nonzero(growth_area_pixels)
 
     return {image_name : area_sizes}
+
+
+def calculate_intesity_in_areas(trimmed_image_name ,trimmed_image, segmented_image ,growth_area_coordinates, spot_areas):
+    '''
+    Description
+    -----------
+    Calculate the intesity within all the areas in the image provided where a pixel was determined to be part of a spot
+
+    Parameters
+    ----------
+    trimmed_image_name : str
+        The name of the trimmed image that is being processed
+    trimmed_image : numpy array
+        The image in which the pixel intensities will be calculated
+    segmented_image : numpy array
+        The image in which the spots were segmented. Will be used to decide which pixels to include in the intesity calculation
+    growth_area_coordinates : numpy array
+        Contains the coordinates of the growth areas in the images
+    spot_areas : dict
+        Contains the areas of the spots in the image. Each key is a tuple of the row and column indexes of the growth area and the value is the total size of the spots in that area
+        i.e the numbers of pixels that were classified as cells in that area
+
+    Returns
+    ----------
+    key value pair of the image name and a dictionary with the growth areas as keys and the spot average intesity as values
+    '''
+    spot_intesities = {}
+    for row_index in range(0, len(growth_area_coordinates)):
+        for column_index, growth_area_coordinates_item in enumerate(growth_area_coordinates[row_index]):
+            start_x = growth_area_coordinates_item["start_x"]
+            end_x = growth_area_coordinates_item["end_x"]
+            start_y = growth_area_coordinates_item["start_y"]
+            end_y = growth_area_coordinates_item["end_y"]
+            
+            # Get the total number of pixels in the growth area that were classified as cells to later calculate the average intesity with
+            total_spot_size = spot_areas[row_index, column_index]
+            #print(f'spot at: ({start_x}, {start_y}) , ({end_x}, {end_y}) size is: {total_spot_size}')
+
+            trimmed_image_grayscale = trimmed_image.copy()
+            trimmed_image_grayscale = cv2.cvtColor(trimmed_image, cv2.COLOR_BGR2GRAY)
+
+            # Use the segmented image as a mask to get only the pixels that were classified as cells in the trimmed image
+            current_segmented_spot_cells = segmented_image[start_y : end_y, start_x : end_x]
+
+            # Get the relevant area from the trimmed image
+            current_trimmed_spot_cells = trimmed_image_grayscale[start_y : end_y, start_x : end_x]
+
+            # Sum the intensities per pixel that was classified as cell in the growth area and divide by the total number of pixels in the growth area
+            total_intesity = np.sum(current_trimmed_spot_cells[current_segmented_spot_cells == 255])
+
+            spot_intesities[row_index, column_index] = total_intesity / total_spot_size
+
+    return {trimmed_image_name : spot_intesities}
 
 
 def organize_raw_data(calculated_areas, plate_format):
@@ -1148,7 +1201,7 @@ def create_hist(data, ax, title, xlabel, linewidth=2):
     ax.set_xlabel(xlabel)
 
 
-def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, plate_num, DI_cutoff):
+def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, DI_cutoff):
     '''
     Description
     -----------
@@ -1177,14 +1230,14 @@ def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, plate_nu
     fig, ax = plt.subplots(2, 1, figsize=(10, 10))
     
     # Create the FoG histogram
-    create_hist(processed_data_df.FoG, ax[0], f'FoG distribution for {prefix_name} {plate_num}', 'FoG')
+    create_hist(processed_data_df.FoG, ax[0], f'FoG distribution for {prefix_name}', 'FoG')
 
     # Create the DI histogram
     DI_cutoff_text = f'DI {DI_cutoff * 100:.2f}%'
-    create_hist(processed_data_df.DI, ax[1], f'Distance of inhibition (DI) distribution for {prefix_name} {plate_num}', DI_cutoff_text)
+    create_hist(processed_data_df.DI, ax[1], f'Distance of inhibition (DI) distribution for {prefix_name} ', DI_cutoff_text)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(graphs_dir, f'{prefix_name}_{plate_num}_FoG_and_{DI_cutoff_text.replace(" " , "_")}_hist.png'), dpi=500)
+    plt.savefig(os.path.join(graphs_dir, f'{prefix_name}_FoG_and_{DI_cutoff_text.replace(" " , "_")}_hist.png'), dpi=500)
 
 
 def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_96_well_plate, graphs_dir, plate_format, active_divisions):
