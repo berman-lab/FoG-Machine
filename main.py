@@ -31,7 +31,7 @@ def main():
     input_path = os.path.normcase(args.path)
     base_name = args.base_name
     plate_format = int(args.format)
-    is_ND = args.is_ND
+    is_ND_plate = args.is_ND
 
     media = args.media
     temprature = args.temperature
@@ -111,14 +111,17 @@ def main():
         calculated_intesities[image_name] = current_image_intensities[image_name]
 
 
-    raw_areas_df = organize_raw_data(calculated_areas, plate_format)
-    raw_areas_df.to_csv(os.path.join(output_dir_processed_data, f'{base_name}_raw_data.csv'), index=False)
+    raw_spots_df = organize_raw_data(calculated_areas, calculated_intesities, plate_format)
+    raw_spots_df.to_csv(os.path.join(output_dir_processed_data, f'{base_name}_raw_data.csv'), index=False)
 
 
     # Calculate the DI (Distance of Inhibition) for each strain
-    DI_df = create_DI_df(raw_areas_df, plate_format, DI_cutoffs, text_division_of_origin_96_well_plate, active_divisions)
+    DI_df = create_DI_df(raw_spots_df, plate_format, DI_cutoffs, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate)
     
-    FoG_df = create_FoG_df(raw_areas_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions)
+    # Sava as csv
+    DI_df.to_csv(os.path.join(output_dir_processed_data, f'{base_name}_DI.csv'), index=False)
+
+    FoG_df = create_FoG_df(raw_spots_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions)
 
     # Merge the DI (Distance of Inhibition) and FoG dataframes on row_index, column_index
     processed_data_df = pd.merge(DI_df, FoG_df, on=['row_index', 'column_index', 'file_name_24hr'])
@@ -137,11 +140,11 @@ def main():
 
     processed_data_df.to_csv(os.path.join(output_dir_processed_data, f'{base_name}_summary_data.csv'), index=False)
 
-    generate_qc_images(segmented_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, active_divisions, plate_format, QC_dir, QC_individual_wells_dir)
+    generate_qc_images(segmented_images, growth_area_coordinates, raw_spots_df, processed_data_df, text_division_of_origin_96_well_plate, active_divisions, plate_format, QC_dir, QC_individual_wells_dir)
 
     create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, base_name, DI_cutoffs)
 
-    create_distance_from_strip_vs_colony_size_graphs(segmented_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, output_dir_graphs, plate_format, active_divisions)
+    create_distance_from_strip_vs_colony_size_graphs(segmented_images, growth_area_coordinates, raw_spots_df, processed_data_df, text_division_of_origin_96_well_plate, output_dir_graphs, plate_format, active_divisions)
 
 
 def get_files_from_directory(path , extension):
@@ -476,12 +479,15 @@ def calculate_intesity_in_areas(trimmed_image_name ,trimmed_image, segmented_ima
             # Sum the intensities per pixel that was classified as cell in the growth area and divide by the total number of pixels in the growth area
             total_intesity = np.sum(current_trimmed_spot_cells[current_segmented_spot_cells == 255])
 
-            spot_intesities[row_index, column_index] = total_intesity / total_spot_size
+            if total_spot_size == 0:
+                spot_intesities[row_index, column_index] = 0
+            else:        
+                spot_intesities[row_index, column_index] = total_intesity / total_spot_size
 
     return {trimmed_image_name : spot_intesities}
 
 
-def organize_raw_data(calculated_areas, plate_format):
+def organize_raw_data(calculated_areas, calculated_intesities, plate_format):
     '''
     Description
     -----------
@@ -492,11 +498,14 @@ def organize_raw_data(calculated_areas, plate_format):
         - column_index : int
         - distance_from_strip : int
         - area : float
+        - average_intesity : float
 
     Parameters
     ----------
     calculated_areas : dict
         A dictionary with the image names as keys and the calculated areas as values under the row and column indexes as keys
+    calculated_intesities : dict
+        A dictionary with the image names as keys and the calculated average intesities as values under the row and column indexes as keys
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
         
@@ -512,6 +521,7 @@ def organize_raw_data(calculated_areas, plate_format):
     column_indexes = []
     distances_from_strip = []
     areas = []
+    average_intesities = []
 
     for image_name in calculated_areas:
         for (row_index, column_index), area in calculated_areas[image_name].items():
@@ -519,12 +529,14 @@ def organize_raw_data(calculated_areas, plate_format):
             
             distances_from_strip.append(curr_distance_from_strip)
             areas.append(area)
+            average_intesities.append(calculated_intesities[image_name][row_index, column_index])
             file_names.append(image_name)
             row_indexes.append(row_index)
             column_indexes.append(column_index)
             
 
-    return pd.DataFrame({"file_name": file_names, "row_index": row_indexes, "column_index": column_indexes, "distance_from_strip": distances_from_strip, "area": areas})
+    return pd.DataFrame({"file_name": file_names, "row_index": row_indexes, "column_index": column_indexes,
+                         "distance_from_strip": distances_from_strip, "area": areas, "average_intesity": average_intesities})
 
 
 def get_distance_from_strip(column_index, plate_format):
@@ -579,11 +591,11 @@ def get_distance_from_strip(column_index, plate_format):
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def calculate_DI(areas_df,control_plate_24hr_ND_name, experiment_plate_24hr_name, origin_well_row, origin_well_column, plate_format, DI_cutoff):
+def calculate_DI(areas_df,control_plate_24hr_ND_name, experiment_plate_24hr_name, origin_well_row, origin_well_column, plate_format, DI_cutoffs, is_ND_plate):
     '''
     Description
     -----------
-    Calculate the DI (Distance of inhibition) a given strain
+    Calculate the DIs (Distance of inhibition)for a given strain
 
     Parameters
     ----------
@@ -599,35 +611,46 @@ def calculate_DI(areas_df,control_plate_24hr_ND_name, experiment_plate_24hr_name
         The column index of the well from which the growth area was taken
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
-    DI_cutoff : float
-        The cutoff for the DI - should be given as a number between 0 and 1
+    DI_cutoffs : list float
+        The cutoffs for the DI - should be given as a numbers between 0 and 1
 
     Returns
     -------
-    DI_from_strip : int
-        The distance if such an index with the given cutoff exists, -1 otherwise
+    DI_from_strip : dict
+        The percentage of inhibition as keys and the DI (Distance of Inhibition) as values,
+        the distance if such an index with the given cutoff exists, -1 otherwise.
     '''
-    experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
-    ND_df_rows_24hr = get_plate_growth_area_sizes(areas_df, control_plate_24hr_ND_name, experiment_well_indexes, plate_format)
-    ND_mean_24hr = ND_df_rows_24hr.area.mean()
 
+    DIs_from_strip = {}
+
+    experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
+    
     # Find the DI (Distance of Inhibition) by finding the first growth area that has a mean of less than ND_mean * DI_cutoff
-    exp_growth_area_sizes = get_plate_growth_area_sizes(areas_df, experiment_plate_24hr_name, experiment_well_indexes, plate_format)
+    exp_growth_area_sizes = get_plate_spots_average_intensities(areas_df, experiment_plate_24hr_name, experiment_well_indexes, plate_format)
 
     # We need to reverse the list since we always want the list to have the colonies closest to the strip at the end.
-    exp_mean_growth_by_distance_from_strip = exp_growth_area_sizes.groupby('distance_from_strip')['area'].mean().values[::-1]
+    exp_mean_growth_by_distance_from_strip = exp_growth_area_sizes.groupby('distance_from_strip')['average_intesity'].mean().values[::-1]
+
+    if is_ND_plate:
+        ND_df_rows_24hr = get_plate_spots_average_intensities(areas_df, control_plate_24hr_ND_name, experiment_well_indexes, plate_format)
+        ND_mean_24hr = ND_df_rows_24hr.average_intesity.mean()
+    else:
+        ND_mean_24hr = exp_mean_growth_by_distance_from_strip[0]
 
     # Find the first growth area that has a mean of less than ND_mean * DI_cutoff
-    DI_from_strip = -1
-    for i, growth_area_size in enumerate(exp_mean_growth_by_distance_from_strip):
-        if growth_area_size < ND_mean_24hr * DI_cutoff:
-            DI_from_strip = i
-            break
+    for DI_cutoff in DI_cutoffs:
+        current_DI_from_strip = -1
+        for i, growth_area_size in enumerate(exp_mean_growth_by_distance_from_strip):
+            if growth_area_size < ND_mean_24hr * DI_cutoff:
+                current_DI_from_strip = i
+                break
+        # Even if no DI for the current cutoff was found, we still want to add it to the dictionary as -1 to indicate the DI does not exist
+        DIs_from_strip[DI_cutoff] = i
 
-    return DI_from_strip
+    return DIs_from_strip
 
 
-def create_DI_df(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_well_plate, active_divisions):
+def create_DI_df(areas_df, plate_format, DI_cutoffs, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate):
     '''
     Description
     -----------
@@ -639,12 +662,14 @@ def create_DI_df(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_w
         The dataframe containing the areas of the growth areas
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
-    DI_cutoff : int
-        The cutoff for the DI (usually 50% growth reduction)
+    DI_cutoffs : list float
+        The cutoff for the DI (usually 80%-0.8, 50%-0.5, 20%-0.2 growth reduction)
     text_division_of_origin_96_well_plate : list str
         The text division of the original plate layout that the images were generated from (['1-4', '5-8', '9-12'])
     active_divisions : dict
         Indicates which divisions have been used in the experiment
+    is_ND_plate : bool
+        Indicates if there is an ND plate in the experiment
 
     Returns
     -------
@@ -655,8 +680,10 @@ def create_DI_df(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_w
             The row index of the well from which the growth area was taken
         origin_column_index : int
             The column index of the well from which the growth area was taken
+        inhibition_precentage : float
+            the percent of inhibition for the specific DI cutoff of the row in the dataframe
         DI : float
-            The DI (Distance of Inhibition) of the strain in the well from which the growth area was taken
+            The DI (Distance of Inhibition) of the specified percent in the inhibition_precentage column of the strain in the well from which the growth area was taken
     '''
     
     # Create lists to later be used for creating the dataframe
@@ -672,26 +699,38 @@ def create_DI_df(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_w
     # Get unique file names
     unique_file_names = list(areas_df.file_name.unique())
 
+    # Check that there are no active divisions first. If the user has specified the wells the images are from then there is no need to make sure the code runs at least once since
+    # specifing the wells will take care of that.
+    # If there are only 2 files and the is_ND_plate is True, or there are 4 files and the is_ND_plate is False then there is no need for the user to specify the wells the images are from
+    # and a flag for this case is set to True. We will only run the DI code once and then exit the loop
+    is_all_divisions_inactive = (all(value == False for value in active_divisions.values()))
+    run_once = False
+    if is_all_divisions_inactive and (len(unique_file_names) == 2 and not is_ND_plate) or (len(unique_file_names) == 4 and is_ND_plate):
+        run_once = True
+
     if plate_format == 1536:
         # Find the pairs of plates as needed for the calculation of the DI (Distance of Inhibition)
         for division in text_division_of_origin_96_well_plate:
             
             # Skip the inactive divisions
-            if not active_divisions[f'is_{division}_active']:
+            if not active_divisions[f'is_{division}_active'] and not run_once:
                 continue
 
-            plates = get_plates_by_division(division, unique_file_names)
+            plates = get_plates_by_division(division, unique_file_names, is_ND_plate, is_all_divisions_inactive)
             
             control_plate_24hr_ND = plates['24hr_ND']
             experiment_plate_24hr = plates['24hr']
 
             for (origin_well_row, origin_well_column) in origin_wells:
-                DI_from_strip = calculate_DI(areas_df, control_plate_24hr_ND, experiment_plate_24hr, origin_well_row, origin_well_column, plate_format, DI_cutoff)
+                DI_from_strip = calculate_DI(areas_df, control_plate_24hr_ND, experiment_plate_24hr, origin_well_row, origin_well_column, plate_format, DI_cutoffs, is_ND_plate)
         
                 file_names.append(experiment_plate_24hr)
                 origin_row_indexes.append(origin_well_row)
                 origin_column_indexes.append(origin_well_column)
                 DIs.append(DI_from_strip)
+
+            # At this point the code has ran once and we can exit the loop
+            run_once = False
 
         # Create the dataframe
         DI_df = pd.DataFrame({'file_name_24hr': file_names,
@@ -705,7 +744,7 @@ def create_DI_df(areas_df, plate_format, DI_cutoff, text_division_of_origin_96_w
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def get_plates_by_division(current_division, unique_file_names):
+def get_plates_by_division(current_division, unique_file_names, is_ND_plate, is_all_divisions_inactive=False):
     '''
     Description
     -----------
@@ -717,22 +756,34 @@ def get_plates_by_division(current_division, unique_file_names):
         The text division of the original plate layout that the images were generated from ('1-4', '5-8', '9-12')
     unique_file_names : list
         A list of the unique file names in the dataframe
+    is_ND_plate : bool
+        Indicates if there is an ND plate in the experiment
 
     Returns
     -------
     experiment_plates : dict
-        A dictionary with '24hr', '24hr_ND', '48hr', '48hr_ND' as keys and the file names as values        
+        A dictionary with '24hr', '24hr_ND', '48hr', '48hr_ND' as keys and the file names as values
+        if is_ND_plate is False then the values under '24hr_ND' and '48hr_ND' will be None
     '''
-    experiment_plate_24hr = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', False, current_division)
-    control_plate_24hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', True, current_division)
-    experiment_plate_48hr = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', False, current_division)
-    control_plate_48hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', True, current_division)
+    control_plate_24hr_ND = None
+    control_plate_48hr_ND = None
+
+    if is_ND_plate:
+        control_plate_24hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', True, current_division)[0]
+        control_plate_48hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', True, current_division)[0]
+
+    if is_all_divisions_inactive:
+        experiment_plate_24hr = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', False)
+        experiment_plate_48hr = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', False)
+    else:
+        experiment_plate_24hr = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', False, current_division)
+        experiment_plate_48hr = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', False, current_division)
     
-    return {'24hr': experiment_plate_24hr[0], '24hr_ND': control_plate_24hr_ND[0],
-            '48hr': experiment_plate_48hr[0], '48hr_ND': control_plate_48hr_ND[0]}
+    return {'24hr': experiment_plate_24hr[0], '24hr_ND': control_plate_24hr_ND,
+            '48hr': experiment_plate_48hr[0], '48hr_ND': control_plate_48hr_ND}
 
 
-def get_plate_name_by_time_ND_and_division(file_names ,time, is_ND, current_division):
+def get_plate_name_by_time_ND_and_division(file_names ,time, is_ND, current_division=''):
     '''
     Helper function to the function get_plates_by_division
     '''
@@ -825,11 +876,11 @@ def convert_original_index_to_experiment_wells_indexes(origin_row_index, origin_
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def get_plate_growth_area_sizes(areas_df, plate_name, experiment_well_indexes, plate_format):
+def get_plate_spots_average_intensities(areas_df, plate_name, experiment_well_indexes, plate_format):
     '''
     Description
     -----------
-    Get the growth area sizes from the plate that was used in the experiment
+    Get the spots average intensities from the plate that was used in the experiment
 
     Parameters
     ----------
@@ -921,7 +972,7 @@ def create_FoG_df(areas_df, FoG_df, plate_format, text_division_of_origin_96_wel
                 experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
 
                 # Calculate the mean of the growth areas in the ND plate
-                ND_48hr_colony_sizes = get_plate_growth_area_sizes(areas_df, control_plate_48hr_ND, experiment_well_indexes, plate_format)
+                ND_48hr_colony_sizes = get_plate_spots_average_intensities(areas_df, control_plate_48hr_ND, experiment_well_indexes, plate_format)
                 ND_mean_48hr = ND_48hr_colony_sizes['area'].mean()
 
                 
@@ -948,7 +999,7 @@ def create_FoG_df(areas_df, FoG_df, plate_format, text_division_of_origin_96_wel
 
                 
                 # Calculate the mean colony size over the DI
-                exp_growth_areas = get_plate_growth_area_sizes(areas_df, experiment_plate_48hr, experiment_well_indexes, plate_format)
+                exp_growth_areas = get_plate_spots_average_intensities(areas_df, experiment_plate_48hr, experiment_well_indexes, plate_format)
                 
 
                 exp_mean_colony_size_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1]
@@ -1296,10 +1347,10 @@ def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area
             well_areas['48hr'] = cv2.cvtColor(well_areas['48hr'], cv2.COLOR_BGR2RGB)
 
             # Prep the 24hr raw colony sizes by distance from strip for plotting
-            colony_sizes_24hr = get_plate_growth_area_sizes(raw_areas_df, plates['24hr'],
+            colony_sizes_24hr = get_plate_spots_average_intensities(raw_areas_df, plates['24hr'],
                                                                 area_coordinates_indexes, plate_format).groupby('row_index')
             
-            colony_sizes_48hr = get_plate_growth_area_sizes(raw_areas_df, plates['48hr'],
+            colony_sizes_48hr = get_plate_spots_average_intensities(raw_areas_df, plates['48hr'],
                                                                 area_coordinates_indexes, plate_format).groupby('row_index')
 
 
