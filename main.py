@@ -117,8 +117,8 @@ def main():
 
     # Calculate the DI (Distance of Inhibition) for each strain
     DI_df = create_DI_df(raw_spots_df, plate_format, DI_cutoffs, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate)
-    
-    FoG_df = create_FoG_df(raw_spots_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions)
+
+    FoG_df = create_FoG_df(raw_spots_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate)
 
     # Merge the DI (Distance of Inhibition) and FoG dataframes on row_index, column_index
     processed_data_df = pd.merge(DI_df, FoG_df, on=['row_index', 'column_index', 'file_name_24hr'])
@@ -697,14 +697,7 @@ def create_DI_df(areas_df, plate_format, DI_cutoffs, text_division_of_origin_96_
     # Get unique file names
     unique_file_names = list(areas_df.file_name.unique())
 
-    # Check that there are no active divisions first. If the user has specified the wells the images are from then there is no need to make sure the code runs at least once since
-    # specifing the wells will take care of that.
-    # If there are only 2 files and the is_ND_plate is True, or there are 4 files and the is_ND_plate is False then there is no need for the user to specify the wells the images are from
-    # and a flag for this case is set to True. We will only run the DI code once and then exit the loop
-    is_all_divisions_inactive = (all(value == False for value in active_divisions.values()))
-    run_once = False
-    if is_all_divisions_inactive and (len(unique_file_names) == 2 and not is_ND_plate) or (len(unique_file_names) == 4 and is_ND_plate):
-        run_once = True
+    run_once = is_run_once(active_divisions, unique_file_names, is_ND_plate)
 
     if plate_format == 1536:
         # Find the pairs of plates as needed for the calculation of the DI (Distance of Inhibition)
@@ -714,7 +707,9 @@ def create_DI_df(areas_df, plate_format, DI_cutoffs, text_division_of_origin_96_
             if not active_divisions[f'is_{division}_active'] and not run_once:
                 continue
 
-            plates = get_plates_by_division(division, unique_file_names, is_ND_plate, is_all_divisions_inactive)
+            run_once = False
+
+            plates = get_plates_by_division(division, unique_file_names, is_ND_plate, is_all_divisions_inactive(active_divisions))
             
             control_plate_24hr_ND = plates['24hr_ND']
             experiment_plate_24hr = plates['24hr']
@@ -729,10 +724,6 @@ def create_DI_df(areas_df, plate_format, DI_cutoffs, text_division_of_origin_96_
                     inhibition_precentages.append(percent_inhibition)
                     DIs.append(current_DI)    
 
-                
-
-            # At this point the code has ran once and we can exit the loop
-            run_once = False
 
         # Create the dataframe
         DI_df = pd.DataFrame({'file_name_24hr': file_names,
@@ -910,7 +901,38 @@ def get_plate_spot_intensities(areas_df, plate_name, experiment_well_indexes, pl
         raise ValueError(f'Format {plate_format} is not supported')
 
 
-def create_FoG_df(areas_df, FoG_df, plate_format, text_division_of_origin_96_well_plate, active_divisions):
+def is_all_divisions_inactive(active_divisions):
+    return (all(value == False for value in active_divisions.values()))
+
+
+def is_run_once(active_divisions, unique_file_names, is_ND_plate):
+    '''
+    Description
+    -----------
+    Check if the code should run at least once despite the potential lack of active divisions
+
+    Parameters
+    ----------
+    active_divisions : dict
+        Indicates which divisions have been used in the experiment
+    unique_file_names : list
+        A list of the unique file names in the dataframe
+    is_ND_plate : bool
+        Indicates if there is an ND plate in the experiment
+
+    Returns
+    -------
+    bool
+        True if the code should run at least once, False otherwise
+    '''
+    # Check that there are no active divisions first. If the user has specified the wells the images are from then there is no need to make sure the code runs at least once since
+    # specifing the wells will take care of that. If there are only 2 files and the is_ND_plate is True,
+    # or there are 4 files and the is_ND_plate is False then there is no need for the user to specify the wells the images are from
+    # and a flag for this case is set to True. We will only run the DI code once and then exit the loop    
+    return is_all_divisions_inactive(active_divisions) and (len(unique_file_names) == 2 and not is_ND_plate) or (len(unique_file_names) == 4 and is_ND_plate)
+
+
+def create_FoG_df(spots_df, FoG_df, plate_format, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate):
     '''
     Description
     -----------
@@ -928,6 +950,8 @@ def create_FoG_df(areas_df, FoG_df, plate_format, text_division_of_origin_96_wel
         The text division of the original plate layout that the images were generated from (['1-4', '5-8', '9-12'])
     active_divisions : dict
         Indicates which divisions have been used in the experiment
+    is_ND_plate : bool
+        Indicates if there is an ND plate in the experiment
 
     Returns
     -------
@@ -954,17 +978,21 @@ def create_FoG_df(areas_df, FoG_df, plate_format, text_division_of_origin_96_wel
     origin_wells = create_32_well_plate_layout()
 
     # Get unique file names
-    unique_file_names = list(areas_df.file_name.unique())
+    unique_file_names = list(spots_df.file_name.unique())
+    
+    run_once = is_run_once(active_divisions, unique_file_names, is_ND_plate)
     
     if plate_format == 1536:
         # Find the pairs of plates as needed for the calculation of the DI
         for division in text_division_of_origin_96_well_plate:
 
             # Skip the inactive divisions
-            if not active_divisions[f'is_{division}_active']:
+            if not active_divisions[f'is_{division}_active'] and not run_once:
                 continue
+            
+            run_once = False
 
-            plates = get_plates_by_division(division, unique_file_names)
+            plates = get_plates_by_division(division, unique_file_names, is_ND_plate, is_all_divisions_inactive(active_divisions))
 
             experiment_plate_24hr = plates['24hr']
             experiment_plate_48hr = plates['48hr']
@@ -975,7 +1003,8 @@ def create_FoG_df(areas_df, FoG_df, plate_format, text_division_of_origin_96_wel
                 experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
 
                 # Calculate the mean of the growth areas in the ND plate
-                ND_48hr_colony_sizes = get_plate_spot_intensities(areas_df, control_plate_48hr_ND, experiment_well_indexes, plate_format)
+                # TODO; continue here
+                ND_48hr_colony_sizes = get_plate_spot_intensities(spots_df, control_plate_48hr_ND, experiment_well_indexes, plate_format)
                 ND_mean_48hr = ND_48hr_colony_sizes['area'].mean()
 
                 
@@ -1002,7 +1031,7 @@ def create_FoG_df(areas_df, FoG_df, plate_format, text_division_of_origin_96_wel
 
                 
                 # Calculate the mean colony size over the DI
-                exp_growth_areas = get_plate_spot_intensities(areas_df, experiment_plate_48hr, experiment_well_indexes, plate_format)
+                exp_growth_areas = get_plate_spot_intensities(spots_df, experiment_plate_48hr, experiment_well_indexes, plate_format)
                 
 
                 exp_mean_colony_size_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1]
