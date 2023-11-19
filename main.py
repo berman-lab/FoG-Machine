@@ -74,12 +74,6 @@ def main():
 
     save_run_parameters(QC_dir, input_path, base_name, media, temprature, drug_name, plate_format)
 
-    
-    # This is slightly dirty but it is the easiest and won't require changes if someone wants to use the tests
-    # Make sure not to have any files in the input directory for this option
-    if 'simple_tests' in input_path:
-        generate_test_images(input_path, start_row, start_col)
-
 
     # Get the images from the input directory 
     input_images = get_files_from_directory(input_path , '.png')
@@ -121,7 +115,7 @@ def main():
     FoG_df = create_FoG_df(raw_spots_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate)
 
     # Merge the DI (Distance of Inhibition) and FoG dataframes on row_index, column_index
-    processed_data_df = pd.merge(DI_df, FoG_df, on=['row_index', 'column_index', 'file_name_24hr'])
+    processed_data_df = pd.merge(DI_df, FoG_df, on=['row_index', 'column_index', 'file_name_24hr', 'inhibition_precentage'])
 
     # Add the experiment conditions to the dataframe
     processed_data_df['media'] = media
@@ -133,15 +127,18 @@ def main():
     processed_data_df = add_well_text_to_df_from_origin_row_row_and_column(processed_data_df)
 
     # Set column order to file_name_24hr, file_name_48hr, row_index, column_index, DI, FoG, media, temprature, drug, plate_format
-    processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'origin_well', 'row_index', 'column_index', 'DI', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
+    processed_data_df = processed_data_df[['file_name_24hr', 'file_name_48hr', 'origin_well', 'row_index', 'column_index', 'inhibition_precentage',
+                                           'DI', 'FoG', 'media', 'temprature', 'drug', 'plate_format']]
 
     processed_data_df.to_csv(os.path.join(output_dir_processed_data, f'{base_name}_summary_data.csv'), index=False)
 
-    generate_qc_images(segmented_images, growth_area_coordinates, raw_spots_df, processed_data_df, text_division_of_origin_96_well_plate, active_divisions, plate_format, QC_dir, QC_individual_wells_dir)
+    generate_qc_images(trimmed_images, growth_area_coordinates, raw_spots_df, text_division_of_origin_96_well_plate, active_divisions, plate_format,
+                       QC_dir, QC_individual_wells_dir, is_ND_plate)
 
     create_FoG_and_DI_hists(processed_data_df, output_dir_graphs, base_name, DI_cutoffs)
 
-    create_distance_from_strip_vs_colony_size_graphs(segmented_images, growth_area_coordinates, raw_spots_df, processed_data_df, text_division_of_origin_96_well_plate, output_dir_graphs, plate_format, active_divisions)
+    create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area_coordinates, raw_spots_df, processed_data_df,
+                                                     text_division_of_origin_96_well_plate, output_dir_graphs, plate_format, active_divisions, is_ND_plate)
 
 
 def get_files_from_directory(path , extension):
@@ -932,7 +929,7 @@ def is_run_once(active_divisions, unique_file_names, is_ND_plate):
     return is_all_divisions_inactive(active_divisions) and (len(unique_file_names) == 2 and not is_ND_plate) or (len(unique_file_names) == 4 and is_ND_plate)
 
 
-def create_FoG_df(spots_df, FoG_df, plate_format, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate):
+def create_FoG_df(spots_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate):
     '''
     Description
     -----------
@@ -971,6 +968,7 @@ def create_FoG_df(spots_df, FoG_df, plate_format, text_division_of_origin_96_wel
     file_names_24hr = []
     origin_row_indexes = []
     origin_column_indexes = []
+    inhibition_precentages = []
     FoGs = []
 
     # Make a list of the wells this current experiment plate came from.
@@ -1002,57 +1000,64 @@ def create_FoG_df(spots_df, FoG_df, plate_format, text_division_of_origin_96_wel
                 # Get the indexes of the growth areas in the experiment plate
                 experiment_well_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_well_row, origin_well_column, plate_format))
 
-                # Calculate the mean of the growth areas in the ND plate
-                # TODO; continue here
-                ND_48hr_colony_sizes = get_plate_spot_intensities(spots_df, control_plate_48hr_ND, experiment_well_indexes, plate_format)
-                ND_mean_48hr = ND_48hr_colony_sizes['area'].mean()
+                if is_ND_plate:
+                    # Calculate the mean of the total spot intesity in the ND plate by using all the spots
+                    spots_48hr_intesities = get_plate_spot_intensities(spots_df, control_plate_48hr_ND, experiment_well_indexes, plate_format)
+                    mean_intensity_48hr = spots_48hr_intesities['total_intesity'].mean()
+                else:
+                    # Calculate the mean of the total spot intesity at 48hr by using only the spots furthest away from the strip
+                    spots_48hr_intesities = get_plate_spot_intensities(spots_df, experiment_plate_48hr, experiment_well_indexes, plate_format)
+                    max_distance_from_strip = spots_48hr_intesities['distance_from_strip'].max()
+                    spots_48hr_intesities_furthest_from_strip = spots_48hr_intesities.loc[spots_48hr_intesities.distance_from_strip == max_distance_from_strip, 'total_intesity']
+                    mean_intensity_48hr = spots_48hr_intesities_furthest_from_strip.mean()
 
-                
+
                 # FoG is defined as the average growth at 48hr in drug over DI divided by the average of growth at 48hr in ND
                 # Therefore, get the distance on the DI for the strain from the DI_df and divide the mean area of the colonies 
                 # closer to the drug strip (than the DI) by the mean area of the ND
 
-                # Get the specific DI for the strain to filter the relevant growth areas later
-                strain_DI = int(FoG_df.loc[(FoG_df.file_name_24hr == experiment_plate_24hr) &
-                                        (FoG_df.row_index == origin_well_row) &
-                                        (FoG_df.column_index == origin_well_column), 'DI'].values[0])
+                # Get the specific DIs for the strain to filter the relevant growth areas later
+                strain_DIs = DI_df.loc[(DI_df.file_name_24hr == experiment_plate_24hr) & (DI_df.row_index == origin_well_row) &
+                            (DI_df.column_index == origin_well_column), ['inhibition_precentage', 'DI']].values
                 
 
-                # if we get a distance of -1 that means that there was no distance at which a reduction of DI_cutoff was reached
-                # therefore we skip this well and set FoG to -1 to mark that it was skipped and to be ignored later
-                if strain_DI == -1:
-                    FoG = -1
+                for inhibition_precentage, current_DI in strain_DIs:
+                    # if we get a distance of -1 that means that there was no distance at which a reduction of DI_cutoff was reached
+                    # therefore we skip this well and set FoG to -1 to mark that it was skipped and to be ignored later
+                    if current_DI == -1:
+                        file_names.append(experiment_plate_48hr)
+                        file_names_24hr.append(experiment_plate_24hr)
+                        origin_row_indexes.append(origin_well_row)
+                        origin_column_indexes.append(origin_well_column)
+                        inhibition_precentages.append(inhibition_precentage)
+                        FoGs.append(-1)
+                        continue
+
+                    
+                    # Calculate the mean colony size over the DI
+                    spots_48hr_intesities = get_plate_spot_intensities(spots_df, experiment_plate_48hr, experiment_well_indexes, plate_format)
+                    
+
+                    exp_mean_colony_size_by_distance_from_strip = spots_48hr_intesities.groupby('distance_from_strip')['total_intesity'].mean().values[::-1]
+                    
+                    # Calculate the mean colony size over the DI from all the colonies that are closer to the strip than the DI
+                    exp_mean_spot_intesities_over_DI = exp_mean_colony_size_by_distance_from_strip[int(current_DI):-1].mean()
+                    
+                    FoG = exp_mean_spot_intesities_over_DI / mean_intensity_48hr
+                    
                     file_names.append(experiment_plate_48hr)
                     file_names_24hr.append(experiment_plate_24hr)
                     origin_row_indexes.append(origin_well_row)
                     origin_column_indexes.append(origin_well_column)
+                    inhibition_precentages.append(inhibition_precentage)
                     FoGs.append(FoG)
-                    continue
-
-                
-                # Calculate the mean colony size over the DI
-                exp_growth_areas = get_plate_spot_intensities(spots_df, experiment_plate_48hr, experiment_well_indexes, plate_format)
-                
-
-                exp_mean_colony_size_by_distance_from_strip = exp_growth_areas.groupby('distance_from_strip')['area'].mean().values[::-1]
-                
-                # Calculate the mean colony size over the DI from all the colonies that are closer to the strip than the DI -
-                # Add 1 to the starin DI since we are only calculating the mean colony size that is closer to the strip than the DI
-                exp_mean_colony_size_over_DI = exp_mean_colony_size_by_distance_from_strip[strain_DI + 1:].mean()
-                
-                FoG = exp_mean_colony_size_over_DI / ND_mean_48hr
-                
-                file_names.append(experiment_plate_48hr)
-                file_names_24hr.append(experiment_plate_24hr)
-                origin_row_indexes.append(origin_well_row)
-                origin_column_indexes.append(origin_well_column)
-                FoGs.append(FoG)
 
         
         FoG_df = pd.DataFrame({'file_name_48hr': file_names,
                                 'file_name_24hr': file_names_24hr,
                                 'row_index': origin_row_indexes,
                                 'column_index': origin_column_indexes,
+                                'inhibition_precentage': inhibition_precentages,
                                 'FoG': FoGs})
         return FoG_df
 
@@ -1098,20 +1103,18 @@ def convert_origin_row_and_column_to_well_text(origin_row_index, origin_column_i
 
 
 def get_column_offset(division):
-    offset = 0
+    offset = 1
     if division == '1-4':
         offset = 1
     elif division == '5-8':
         offset = 5
     elif division == '9-12':
         offset = 9
-    else:
-        raise ValueError(f'Division {division} is not supported')
     
     return offset
 
 
-def get_image_part_for_origin_well(trimmed_images, division, origin_row, origin_column, growth_area_coordinates, plate_format):
+def get_image_part_for_origin_well(trimmed_images, division, origin_row, origin_column, growth_area_coordinates, plate_format,is_ND_plate, is_all_divisions_inactive):
     '''
     Description
     -----------
@@ -1141,11 +1144,17 @@ def get_image_part_for_origin_well(trimmed_images, division, origin_row, origin_
     
     image_parts = {}
 
-    plates = get_plates_by_division(division, trimmed_images.keys())
+    plates = get_plates_by_division(division, trimmed_images.keys(), is_ND_plate, is_all_divisions_inactive)
 
     colony_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_row, origin_column, plate_format))
 
     for plate in plates:
+
+        # If the plates list doesn't have the current key (24hr_ND for example) then set the value to None and continue
+        if plates[plate] is None:
+            image_parts[plate] = None
+            continue
+
         # image[start_row:end_row, start_col:end_col]
         start_row = growth_area_coordinates[colony_indexes[0][0]][colony_indexes[-1][0]]["start_y"]
         end_row = growth_area_coordinates[colony_indexes[-1][0], colony_indexes[-1][0]]["end_y"]
@@ -1165,7 +1174,7 @@ def make_four_picture_grid(top_left, top_right, bottom_left, bottom_right):
     return joined_picutres
 
 
-def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_origin_96_well_plate, active_divisions, plate_format, output_path, QC_individual_wells_dir):
+def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, text_division_of_origin_96_well_plate, active_divisions, plate_format, output_path, QC_individual_wells_dir, is_ND_plate):
     '''
     Description
     -----------
@@ -1179,8 +1188,6 @@ def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, 
         Contains the coordinates of the growth areas in the images
     raw_areas_df : pandas dataframe
         The dataframe containing the areas of the growth areas
-    processed_data_df : pandas dataframe
-        The dataframe containing the processed data (DI and FoG)
     text_division_of_origin_96_well_plate : list str
         The text division of the original plate layout that the images were generated from (['1-4', '5-8', '9-12'])
     active_divisions : dict
@@ -1234,19 +1241,28 @@ def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, 
     # Individual growth areas by origin well
     origin_wells = create_32_well_plate_layout()
 
-    for origin_row, origin_column in origin_wells:
-        for division in text_division_of_origin_96_well_plate:
+    is_all_current_divisions_inactive = is_all_divisions_inactive(active_divisions)
 
-            if not active_divisions[f'is_{division}_active']:
+    for division in text_division_of_origin_96_well_plate:
+        run_once = is_run_once(active_divisions, organized_images.keys(), is_ND_plate)
+        
+        for origin_row, origin_column in origin_wells:
+
+            if not active_divisions[f'is_{division}_active'] and not run_once:
                 continue
 
-            well_areas = get_image_part_for_origin_well(images_with_growth_data, division, origin_row, origin_column, growth_area_coordinates, plate_format)
+            well_areas = get_image_part_for_origin_well(images_with_growth_data, division, origin_row, origin_column, growth_area_coordinates, plate_format, is_ND_plate, is_all_current_divisions_inactive)
 
-            all_areas = make_four_picture_grid(well_areas['24hr_ND'], well_areas['48hr_ND'], well_areas['24hr'], well_areas['48hr'])
+            if is_ND_plate:
+                all_areas = make_four_picture_grid(well_areas['24hr_ND'], well_areas['48hr_ND'], well_areas['24hr'], well_areas['48hr'])
+            else:
+                all_areas = cv2.vconcat([cv2.hconcat([well_areas['24hr'], well_areas['48hr']])])
 
             # Save the result image
             cv2.imwrite(f'{QC_individual_wells_dir}/{image_name}_{convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)}.png', all_areas)
-    
+
+        run_once = False
+
     return True
 
 
@@ -1284,7 +1300,7 @@ def create_hist(data, ax, title, xlabel, linewidth=2):
     ax.set_xlabel(xlabel)
 
 
-def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, DI_cutoff):
+def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, DI_cutoffs):
     '''
     Description
     -----------
@@ -1310,20 +1326,25 @@ def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, DI_cutof
     # Filter out the rows that have FoG of -1
     processed_data_df = processed_data_df.loc[processed_data_df.FoG != -1, :]
     
-    fig, ax = plt.subplots(2, 1, figsize=(10, 10))
-    
-    # Create the FoG histogram
-    create_hist(processed_data_df.FoG, ax[0], f'FoG distribution for {prefix_name}', 'FoG')
+    for inhibition_precentage in DI_cutoffs:
+        inhibition_percent_text = f'{inhibition_precentage * 100:.0f}%'
 
-    # Create the DI histogram
-    DI_cutoff_text = f'DI {DI_cutoff * 100:.2f}%'
-    create_hist(processed_data_df.DI, ax[1], f'Distance of inhibition (DI) distribution for {prefix_name} ', DI_cutoff_text)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(graphs_dir, f'{prefix_name}_FoG_and_{DI_cutoff_text.replace(" " , "_")}_hist.png'), dpi=500)
+        processed_data_df_current_inhibition_percent = processed_data_df.loc[processed_data_df.inhibition_precentage == inhibition_precentage, :]
+
+        fig, ax = plt.subplots(2, 1, figsize=(10, 10))
+
+        # Create the FoG histogram
+        create_hist(processed_data_df_current_inhibition_percent.FoG, ax[0], f'FoG {inhibition_percent_text} distribution for {prefix_name}', f'FoG {inhibition_percent_text}')
+
+        # Create the DI histogram
+        DI_cutoff_text = f'DI_{inhibition_percent_text}'
+        create_hist(processed_data_df_current_inhibition_percent.DI, ax[1], f'DI {inhibition_percent_text} distribution for {prefix_name} ', DI_cutoff_text)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(graphs_dir, f'{prefix_name}_FoG_and_DI_{inhibition_percent_text}_hist.png'), dpi=500)
 
 
-def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_96_well_plate, graphs_dir, plate_format, active_divisions):
+def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_96_well_plate, graphs_dir, plate_format, active_divisions, is_ND_plate):
     '''
     Description
     -----------
@@ -1360,14 +1381,16 @@ def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area
 
     colors = ['#E63B60', '#067FD0', '#223BC9', '#151A7B']
 
-    for origin_row, origin_column in origin_wells:
-        for division in text_division_of_96_well_plate:
+    run_once = is_run_once(active_divisions, trimmed_images.keys(), is_ND_plate)
+
+    for division in text_division_of_96_well_plate:
+        for origin_row, origin_column in origin_wells:
             
-            if not active_divisions[f'is_{division}_active']:
+            if not active_divisions[f'is_{division}_active'] and not run_once:
                 continue
 
-            plates = get_plates_by_division(division, trimmed_images.keys())
-            well_areas = get_image_part_for_origin_well(trimmed_images, division, origin_row, origin_column, growth_area_coordinates, plate_format)
+            plates = get_plates_by_division(division, trimmed_images.keys(), is_ND_plate, is_all_divisions_inactive(active_divisions))
+            well_areas = get_image_part_for_origin_well(trimmed_images, division, origin_row, origin_column, growth_area_coordinates, plate_format, is_ND_plate, is_all_divisions_inactive(active_divisions))
             area_coordinates_indexes = list(convert_original_index_to_experiment_wells_indexes(origin_row, origin_column, plate_format))
 
             # Check if need to flip image horizontally so it will be in the same orientation as the other images - strip on the right 
@@ -1385,24 +1408,15 @@ def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area
             colony_sizes_48hr = get_plate_spot_intensities(raw_areas_df, plates['48hr'],
                                                                 area_coordinates_indexes, plate_format).groupby('row_index')
 
+            # Get all the DIs for the current well
+            strain_DIs = processed_data_df.loc[(processed_data_df.file_name_24hr == plates['24hr']) & (processed_data_df.row_index == origin_row) &
+                            (processed_data_df.column_index == origin_column), ['inhibition_precentage', 'DI']].values                
 
-            # Get the DI 80, 50 and 20 for the current strain
-            # 80% inhibition - need to find the area at which the colony size is 20% of the original size. Therefore provide 1 - %inihibition as the DI cutoff
-            strain_DI_80 = calculate_DI(raw_areas_df, plates['24hr_ND'], plates['24hr'], origin_row, origin_column, plate_format, 0.2)
-                                
             
-            # 50% inhibition - need to find the area at which the colony size is 50% of the original size. Therefore provide 1 - %inihibition as the DI cutoff
-            strain_DI_50 = int(processed_data_df.loc[(processed_data_df.file_name_24hr == plates['24hr']) &
-                                        (processed_data_df.row_index == origin_row) &
-                                        (processed_data_df.column_index == origin_column), 'DI'].values[0])
-
-            # 20% inhibition - need to find the area at which the colony size is 80% of the original size. Therefore provide 1 - %inihibition as the DI cutoff
-            strain_DI_20 = calculate_DI(raw_areas_df, plates['24hr_ND'], plates['24hr'], origin_row, origin_column, plate_format, 0.8)
-
-
+            # Now that all the data is ready, graph it
             fig, ax = plt.subplots(2, 2, figsize=(16, 9))
             # Set the title of the graph
-            fig.suptitle(f'Colony size vs distance from strip for {convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)} plate {division}', fontsize=16)
+            fig.suptitle(f'Colony total intensity vs distance from strip for {convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)} plate {division}', fontsize=16)
 
             ax[0, 0].set_title('24hr')
             ax[0, 0].set_ylabel('Colony size [pixels]')
@@ -1437,13 +1451,16 @@ def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area
                 ax[0,1].plot(row_data[1]['distance_from_strip'][::-1], row_data[1]['area'], label=f'Row {row_index + 1}', color=colors[row_index])
 
             # add DIs to plots
+            colors_for_DI = ['#FA8072', '#B22222', '#7C0A02', '#FF0000', '#FF6347']
             for row_index, column_index in [(0, 0), (0, 1)]:
-                if strain_DI_20 != -1:
-                    ax[row_index, column_index].axvline(x=strain_DI_20, color='#FA8072', linestyle='--', label=f'DI_20%={strain_DI_20}')
-                if strain_DI_50 != -1:
-                    ax[row_index, column_index].axvline(x=strain_DI_50, color='#B22222', linestyle=':', label=f'DI_50%={strain_DI_50}')
-                if strain_DI_80 != -1:
-                    ax[row_index, column_index].axvline(x=strain_DI_80, color='#7C0A02', linestyle='-.', label=f'DI_80%={strain_DI_80}')
+                current_color_index = 0
+                for inhibition_precentage, current_DI in strain_DIs:
+                    inhibition_percent_text = f'{inhibition_precentage * 100:.0f}%'
+                    if current_DI != -1:
+                        ax[row_index, column_index].axvline(x=current_DI, color=colors_for_DI[current_color_index], linestyle='--', 
+                                                            label=f'DI_{inhibition_percent_text}={int(current_DI)}')
+                        current_color_index += 1
+                    
                 
             ax[1, 0].imshow(well_areas['24hr'])
             ax[1, 1].imshow(well_areas['48hr'])
@@ -1452,229 +1469,7 @@ def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area
 
             plt.savefig(os.path.join(graphs_dir, f'{convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)}_distance_vs_colony_size.png'), dpi=200)
             plt.close('all')
-
-
-def generate_test_images(save_path, start_row, start_column):
-    ''' 
-    Description
-    -----------
-    Generate test images
-
-    Parameters
-    ----------
-    save_path : str
-        The path to the directory in which the images will be saved
-    start_row : int
-        The row index of the first growth area in the experiment plate
-    start_column : int
-        The column index of the first growth area in the experiment plate
-
-    Returns
-    -------
-    None
-    '''
-
-    # TODO - this is pretty gross at the moment due to the time rush, need to clean it up
-    white = (255, 255, 255)
-    move_x = 54
-    move_y = 54
-    y_start_loc = 20 + start_row
-
-    y_start_indexes = []
-    for i in range(1, 21):
-        y_start_indexes.append(y_start_loc)
-        y_start_loc += move_y
-    
-    # 24hr and 24hr_ND
-    img_24hr = np.zeros((3096, 4128, 3), np.uint8)
-
-    # Input actual pixel values for the colony sizes
-    colony_sizes = [1, 1, 1, 1, 9, 9, 9, 9, 10, 10]
-    for y_start_index in y_start_indexes:
-        
-        x_location = 152 + start_column
-        colony_size = 1
-        
-        for colony_size in colony_sizes:
-            img_24hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-            x_location += move_x
-
-    # A2
-    colony_sizes = [10, 10, 9, 9, 9, 9, 1, 1, 1, 1]
-    for y_start_index in y_start_indexes[0:4]:
-            
-            x_location = 152 + start_column + (move_x * 10)
-            
-            for colony_size in colony_sizes:
-                img_24hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                x_location += move_x
-
-    # A3
-    colony_sizes = [1, 1, 1, 1, 9, 9, 9, 9, 10, 10]
-    for y_start_index in y_start_indexes[0:4]:
-                
-                x_location = 152 + start_column + (move_x * 24)
-                
-                for colony_size in colony_sizes:
-                    img_24hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                    x_location += move_x
-
-
-    # A4
-    colony_sizes = [10, 10, 9, 9, 9, 9, 1, 1, 1, 1]
-    for y_start_index in y_start_indexes[0:4]:
-                    
-                    x_location = 152 + start_column + (move_x * 34)
-                    
-                    for colony_size in colony_sizes:
-                        img_24hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                        x_location += move_x
-
-    cv2.imwrite(os.path.join(save_path ,'test_24hr_1-4.png'), img_24hr)
-    cv2.imwrite(os.path.join(save_path ,'test_24hr_1-4_ND.png'), img_24hr)
-    cv2.imwrite(os.path.join(save_path ,'test_24hr_5-8.png'), img_24hr)
-    cv2.imwrite(os.path.join(save_path ,'test_24hr_5-8_ND.png'), img_24hr)
-    cv2.imwrite(os.path.join(save_path ,'test_24hr_9-12.png'), img_24hr)
-    cv2.imwrite(os.path.join(save_path ,'test_24hr_9-12_ND.png'), img_24hr)
-
-
-    # 48hr ND image
-    img_48hr_ND = np.zeros((3096, 4128, 3), np.uint8)
-    
-    # A1, B1, C1, D1, E1 - all 10
-    for y_start_index in y_start_indexes:
-            
-            x_location = 152 + start_column
-            colony_size = 10
-            
-            for i in range(1, 11):
-                img_48hr_ND[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                x_location += move_x
-
-
-    # A2
-    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
-    for y_start_index in y_start_indexes[0:4]:
-                    
-        x_location = 152 + start_column + (move_x * 10)
-        
-        for colony_size in colony_sizes:
-            img_48hr_ND[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-            x_location += move_x
-
-
-    # A3
-    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
-    for y_start_index in y_start_indexes[0:4]:
-                            
-        x_location = 152 + start_column + (move_x * 24)
-        
-        for colony_size in colony_sizes:
-            img_48hr_ND[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-            x_location += move_x
-
-    # A4
-    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
-    for y_start_index in y_start_indexes[0:4]:
-                                        
-        x_location = 152 + start_column + (move_x * 34)
-        
-        for colony_size in colony_sizes:
-            img_48hr_ND[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-            x_location += move_x
-
-    cv2.imwrite(os.path.join(save_path ,'test_48hr_1-4_ND.png'), img_48hr_ND)
-    cv2.imwrite(os.path.join(save_path ,'test_48hr_5-8_ND.png'), img_48hr_ND)
-    cv2.imwrite(os.path.join(save_path ,'test_48hr_9-12_ND.png'), img_48hr_ND)
-
-
-    # 48hr image
-    img_48hr = np.zeros((3096, 4128, 3), np.uint8)
-
-    # A1 - all 10
-    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
-    for y_start_index in y_start_indexes[0:4]:
-            
-            x_location = 152 + start_column
-            
-            for colony_size in colony_sizes:
-                img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                x_location += move_x
-
-    # A2 - 10, 10, 10, 10, 10, 10, 10, 2, 2, 2
-    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 2, 2, 2]
-    for y_start_index in y_start_indexes[0:4]:
-                
-                x_location = 152 + start_column + (move_x * 10)
-                
-                for colony_size in colony_sizes:
-                    img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                    x_location += move_x
-
-    # A3 - 3, 3, 3, 10, 10, 10, 10, 10, 10, 10
-    colony_sizes = [3, 3, 3, 10, 10, 10, 10, 10, 10, 10]
-    for y_start_index in y_start_indexes[0:4]:
-                
-                x_location = 152 + start_column + (move_x * 24)
-                
-                for colony_size in colony_sizes:
-                    img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                    x_location += move_x
-
-    # A4 - 10, 10, 10, 10, 10, 10, 10, 4, 4, 4
-    colony_sizes = [10, 10, 10, 10, 10, 10, 10, 4, 4, 4]
-    for y_start_index in y_start_indexes[0:4]:
-                
-                x_location = 152 + start_column + (move_x * 34)
-                
-                for colony_size in colony_sizes:
-                    img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                    x_location += move_x
-
-    # B1- 8, 9, 9, 10, 10, 10, 10, 10. 10, 10
-    colony_sizes = [8, 9, 9, 10, 10, 10, 10, 10, 10, 10]
-    for y_start_index in y_start_indexes[4:8]:
-            
-            x_location = 152 + start_column
-            
-            for colony_size in colony_sizes:
-                img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                x_location += move_x 
-
-    # C1 - 4, 5, 6, 10, 10, 10, 10, 10, 10, 10
-    colony_sizes = [4, 5, 6, 10, 10, 10, 10, 10, 10, 10]
-    for y_start_index in y_start_indexes[8:12]:
-            
-            x_location = 152 + start_column
-            
-            for colony_size in colony_sizes:
-                img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                x_location += move_x
-            
-    # D1 - 2, 3, 4, 10, 10, 10, 10, 10, 10, 10
-    colony_sizes = [2, 3, 4, 10, 10, 10, 10, 10, 10, 10]
-    for y_start_index in y_start_indexes[12:16]:
-            
-            x_location = 152 + start_column
-            
-            for colony_size in colony_sizes:
-                img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                x_location += move_x
-
-    # E1 - 0, 0, 0, 10, 10, 10, 10, 10, 10, 10
-    colony_sizes = [0, 0, 0, 10, 10, 10, 10, 10, 10, 10]
-    for y_start_index in y_start_indexes[16:20]:
-            
-            x_location = 152 + start_column
-            
-            for colony_size in colony_sizes:
-                img_48hr[y_start_index : y_start_index + 1, x_location : x_location + colony_size] = white
-                x_location += move_x
-
-
-    cv2.imwrite(os.path.join(save_path ,'test_48hr_1-4.png'), img_48hr)
-    cv2.imwrite(os.path.join(save_path ,'test_48hr_5-8.png'), img_48hr)
-    cv2.imwrite(os.path.join(save_path ,'test_48hr_9-12.png'), img_48hr)
+        run_once = False
 
 
 if __name__ == "__main__":
