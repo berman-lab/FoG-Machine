@@ -83,7 +83,7 @@ def main():
 
 
     segmented_images, trimmed_images = preprocess_images(input_images, start_row, end_row, start_col, end_col, base_name, media, temprature, drug_name,
-                                                         plate_format, output_dir_segmented_images, output_dir_cropped_images)
+                                                         plate_format, output_dir_segmented_images, output_dir_cropped_images, is_ND_plate)
 
 
     # Get the areas in the experiment plates
@@ -211,7 +211,7 @@ def check_active_divisions(input_images, text_division_of_origin_96_well_plate):
 
 
 def preprocess_images(input_images, start_row, end_row, start_col, end_col, prefix_name, media, temprature, drug_name, plate_format,
-                      output_path_segmented_images, output_path_cropped_images):
+                      output_path_segmented_images, output_path_cropped_images,is_ND_plate):
     '''
     Description
     -----------
@@ -243,6 +243,8 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         The path to the directory in which the segmented images will be saved
     output_path_cropped_images : str
         The path to the directory in which the cropped images will be saved
+    is_ND_plate : bool
+        Indicates if there is an ND plate in the experiment
 
     Returns
     -------
@@ -283,7 +285,7 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         elif '9-12' in picture_name:
             numbers = [9, 10, 11, 12]
         # if there are only two images then the user shouldn't have to specify the wells the images are from
-        elif len(input_images) == 2:
+        elif (len(input_images) == 2) or (is_ND_plate and len(input_images) == 4):
             pass
         else:
             print(f"file {picture_name} does not contain the numbers in the name")
@@ -471,12 +473,12 @@ def calculate_intesity_in_areas(trimmed_image_name ,trimmed_image, segmented_ima
             current_trimmed_spot_cells = trimmed_image_grayscale[start_y : end_y, start_x : end_x]
 
             # Sum the intensities per pixel that was classified as cell in the growth area and divide by the total number of pixels in the growth area
-            total_intesity = np.sum(current_trimmed_spot_cells[current_segmented_spot_cells == 255])
+            total_intensity = np.sum(current_trimmed_spot_cells[current_segmented_spot_cells == 255])
 
             if total_spot_size == 0:
                 spot_intesities[row_index, column_index] = 0
             else:        
-                spot_intesities[row_index, column_index] = total_intesity
+                spot_intesities[row_index, column_index] = total_intensity
 
     return {trimmed_image_name : spot_intesities}
 
@@ -515,7 +517,7 @@ def organize_raw_data(calculated_areas, calculated_intesities, plate_format):
     column_indexes = []
     distances_from_strip = []
     areas = []
-    total_intesities = []
+    total_intensities = []
 
     for image_name in calculated_areas:
         for (row_index, column_index), area in calculated_areas[image_name].items():
@@ -523,14 +525,14 @@ def organize_raw_data(calculated_areas, calculated_intesities, plate_format):
             
             distances_from_strip.append(curr_distance_from_strip)
             areas.append(area)
-            total_intesities.append(calculated_intesities[image_name][row_index, column_index])
+            total_intensities.append(calculated_intesities[image_name][row_index, column_index])
             file_names.append(image_name)
             row_indexes.append(row_index)
             column_indexes.append(column_index)
             
 
     return pd.DataFrame({"file_name": file_names, "row_index": row_indexes, "column_index": column_indexes,
-                         "distance_from_strip": distances_from_strip, "area": areas, "total_intesity": total_intesities})
+                         "distance_from_strip": distances_from_strip, "area": areas, "total_intensity": total_intensities})
 
 
 def get_distance_from_strip(column_index, plate_format):
@@ -623,11 +625,11 @@ def calculate_DI(areas_df,control_plate_24hr_ND_name, experiment_plate_24hr_name
     exp_growth_area_sizes = get_plate_spot_intensities(areas_df, experiment_plate_24hr_name, experiment_well_indexes, plate_format)
 
     # We need to reverse the list since we always want the list to have the colonies closest to the strip at the end.
-    exp_mean_growth_by_distance_from_strip = exp_growth_area_sizes.groupby('distance_from_strip')['total_intesity'].mean().values[::-1]
+    exp_mean_growth_by_distance_from_strip = exp_growth_area_sizes.groupby('distance_from_strip')['total_intensity'].mean().values[::-1]
 
     if is_ND_plate:
         ND_df_rows_24hr = get_plate_spot_intensities(areas_df, control_plate_24hr_ND_name, experiment_well_indexes, plate_format)
-        ND_mean_24hr = ND_df_rows_24hr.total_intesity.mean()
+        ND_mean_24hr = ND_df_rows_24hr.total_intensity.mean()
     else:
         ND_mean_24hr = exp_mean_growth_by_distance_from_strip[0]
 
@@ -759,19 +761,28 @@ def get_plates_by_division(current_division, unique_file_names, is_ND_plate, is_
     control_plate_24hr_ND = None
     control_plate_48hr_ND = None
 
-    if is_ND_plate:
-        control_plate_24hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', True, current_division)[0]
-        control_plate_48hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', True, current_division)[0]
-
-    if is_all_divisions_inactive:
+    # There is an ND plate but all divisions are inactive, therefore we can get the plates by time and ND without specifying the division.
+    # Overall, we get 2 ND plates and 2 experiment plates
+    if is_ND_plate and is_all_divisions_inactive:
         experiment_plate_24hr = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', False)
         experiment_plate_48hr = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', False)
-    else:
+        control_plate_24hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', True)
+        control_plate_48hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', True)
+    # There is an ND plate and there is an active division, therefore we need to specify the division
+    # Overall, we get 2 ND plates and 2 experiment plates
+    elif is_ND_plate and not is_all_divisions_inactive:
+        control_plate_24hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', True, current_division)
+        control_plate_48hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', True, current_division)
+        experiment_plate_24hr = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', False, current_division)
+        experiment_plate_48hr = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', False, current_division)
+    # There is no ND plate and there is an active division, therefore we need to specify the division
+    # Since there is no ND plate, we only get the 2 experiment plates. The control plates will be None in this case and the code down the line will handle that
+    elif not is_ND_plate and not is_all_divisions_inactive:
         experiment_plate_24hr = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', False, current_division)
         experiment_plate_48hr = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', False, current_division)
     
-    return {'24hr': experiment_plate_24hr[0], '24hr_ND': control_plate_24hr_ND,
-            '48hr': experiment_plate_48hr[0], '48hr_ND': control_plate_48hr_ND}
+    return {'24hr': experiment_plate_24hr, '24hr_ND': control_plate_24hr_ND,
+            '48hr': experiment_plate_48hr, '48hr_ND': control_plate_48hr_ND}
 
 
 def get_plate_name_by_time_ND_and_division(file_names ,time, is_ND, current_division=''):
@@ -787,7 +798,10 @@ def get_plate_name_by_time_ND_and_division(file_names ,time, is_ND, current_divi
         files = [file_name for file_name in file_names if (time in file_name) and
                                                      ('ND' not in file_name) and
                                                      (current_division in file_name)]
-    return files
+    if not len(files) == 1:
+        raise ValueError(f'Found {len(files)} files for time {time}, ND: {is_ND} and division {current_division}.
+                        Expected 1 file, please check that all files in the input directory are in the correct format as specified in the documentation')
+    return files[0]
         
 
 def create_32_well_plate_layout():
@@ -1003,12 +1017,12 @@ def create_FoG_df(spots_df, DI_df, plate_format, text_division_of_origin_96_well
                 if is_ND_plate:
                     # Calculate the mean of the total spot intesity in the ND plate by using all the spots
                     spots_48hr_intesities = get_plate_spot_intensities(spots_df, control_plate_48hr_ND, experiment_well_indexes, plate_format)
-                    mean_intensity_48hr = spots_48hr_intesities['total_intesity'].mean()
+                    mean_intensity_48hr = spots_48hr_intesities['total_intensity'].mean()
                 else:
                     # Calculate the mean of the total spot intesity at 48hr by using only the spots furthest away from the strip
                     spots_48hr_intesities = get_plate_spot_intensities(spots_df, experiment_plate_48hr, experiment_well_indexes, plate_format)
                     max_distance_from_strip = spots_48hr_intesities['distance_from_strip'].max()
-                    spots_48hr_intesities_furthest_from_strip = spots_48hr_intesities.loc[spots_48hr_intesities.distance_from_strip == max_distance_from_strip, 'total_intesity']
+                    spots_48hr_intesities_furthest_from_strip = spots_48hr_intesities.loc[spots_48hr_intesities.distance_from_strip == max_distance_from_strip, 'total_intensity']
                     mean_intensity_48hr = spots_48hr_intesities_furthest_from_strip.mean()
 
 
@@ -1038,12 +1052,16 @@ def create_FoG_df(spots_df, DI_df, plate_format, text_division_of_origin_96_well
                     spots_48hr_intesities = get_plate_spot_intensities(spots_df, experiment_plate_48hr, experiment_well_indexes, plate_format)
                     
 
-                    exp_mean_colony_size_by_distance_from_strip = spots_48hr_intesities.groupby('distance_from_strip')['total_intesity'].mean().values[::-1]
+                    experiment_mean_spot_intensity_by_distance_from_strip = spots_48hr_intesities.groupby('distance_from_strip')['total_intensity'].mean().values[::-1]
                     
                     # Calculate the mean colony size over the DI from all the colonies that are closer to the strip than the DI
-                    exp_mean_spot_intesities_over_DI = exp_mean_colony_size_by_distance_from_strip[int(current_DI):-1].mean()
+                    spots_intensity_over_DI = experiment_mean_spot_intensity_by_distance_from_strip[int(current_DI):-1]
+                    if len(spots_intensity_over_DI) == 0:
+                        experiment_mean_spots_intensity_over_DI = 0
+                    else:
+                        experiment_mean_spots_intensity_over_DI = spots_intensity_over_DI.mean()
                     
-                    FoG = exp_mean_spot_intesities_over_DI / mean_intensity_48hr
+                    FoG = experiment_mean_spots_intensity_over_DI / mean_intensity_48hr
                     
                     file_names.append(experiment_plate_48hr)
                     file_names_24hr.append(experiment_plate_24hr)
@@ -1245,14 +1263,15 @@ def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, 
 
     is_all_current_divisions_inactive = is_all_divisions_inactive(active_divisions)
 
+    run_once = is_run_once(active_divisions, organized_images.keys(), is_ND_plate)
+
     for division in text_division_of_origin_96_well_plate:
-        run_once = is_run_once(active_divisions, organized_images.keys(), is_ND_plate)
-        
-        for origin_row, origin_column in origin_wells:
-
-            if not active_divisions[f'is_{division}_active'] and not run_once:
+        if not active_divisions[f'is_{division}_active'] and not run_once:
                 continue
+        
+        run_once = False
 
+        for origin_row, origin_column in origin_wells:
             well_areas = get_image_part_for_origin_well(images_with_growth_data, division, origin_row, origin_column, growth_area_coordinates, plate_format, is_ND_plate, is_all_current_divisions_inactive)
 
             if is_ND_plate:
@@ -1262,8 +1281,6 @@ def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, 
 
             # Save the result image
             cv2.imwrite(f'{QC_individual_wells_dir}/{image_name}_{convert_origin_row_and_column_to_well_text(origin_row, origin_column, division)}.png', all_areas)
-
-        run_once = False
 
     return True
 
