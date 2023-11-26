@@ -259,7 +259,7 @@ def preprocess_images(input_images, start_row, end_row, start_col, end_col, pref
         image = cv2.imread(picture_path)
 
         # Make sure the image aspect ratio is 4:3 (width:height)
-        if image.shape[1] / image.shape[0] != 4/3:
+        if round(image.shape[1] / image.shape[0], 1) != round(4/3, 1):
             err_str = f"image {picture_name} is not of aspect ratio 4:3 (width:height)"
             print(err_str)
             return ValueError(err_str)
@@ -1225,14 +1225,16 @@ def generate_qc_images(organized_images, growth_area_coordinates, raw_areas_df, 
         for row_index, coordintes_row in enumerate(growth_area_coordinates):
             for column_index, coordinte in enumerate(coordintes_row):
 
-                curr_colony_size = indexed_raw_areas_df.xs((image_name, row_index, column_index), level=['file_name', 'row_index', 'column_index'])['area'].values[0]
+                spot_total_intensity = indexed_raw_areas_df.xs((image_name, row_index, column_index), level=['file_name', 'row_index', 'column_index'])['total_intensity'].values[0]
                 
                 start_point = (coordinte["start_x"], coordinte["start_y"])
                 end_point = (coordinte["end_x"], coordinte["end_y"])
                 image = cv2.rectangle(image, start_point, end_point, border_color, border_thickness)
 
-                # Add the colony size and indexes to the bottom left corner of the rectangle
-                cv2.putText(image, f'{curr_colony_size:.0f}', (coordinte["start_x"] + 5, coordinte["start_y"] + 45), cv2.FONT_HERSHEY_COMPLEX, 0.5, border_color, 1)
+                # Add the colony size to the image
+                cv2.putText(image, '{:.0e}'.format(spot_total_intensity), (coordinte["start_x"], coordinte["start_y"] + 45), cv2.FONT_HERSHEY_COMPLEX, 0.5, border_color, 1)
+                if row_index == 0:
+                    cv2.putText(image, f'{column_index}', (coordinte["start_x"], coordinte["start_y"]), cv2.FONT_HERSHEY_COMPLEX, 0.5, border_color, 1)
 
         # Save the result image
         cv2.imwrite(f'{output_path}/{image_name}.png', image)
