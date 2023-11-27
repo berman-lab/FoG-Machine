@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 def main():
     styles = ['science', 'notebook', 'grid']
     plt.style.use(styles)
+    # Use Agg backend to avoid displaying the figures and lower RAM usage
+    matplotlib.use("Agg")
 
     # Set up the argument parser
     parser = argparse.ArgumentParser()
@@ -1359,6 +1361,7 @@ def create_FoG_and_DI_hists(processed_data_df, graphs_dir, prefix_name, DI_cutof
         
         plt.tight_layout()
         plt.savefig(os.path.join(graphs_dir, f'{prefix_name}_FoG_and_DI_{inhibition_percent_text}_hist.png'), dpi=500)
+        plt.close('all')
 
 
 def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area_coordinates, raw_areas_df, processed_data_df, text_division_of_96_well_plate, graphs_dir, plate_format, active_divisions, is_ND_plate):
@@ -1390,9 +1393,6 @@ def create_distance_from_strip_vs_colony_size_graphs(trimmed_images, growth_area
     -------
     None
     '''
-
-    # Use Agg backend to avoid displaying the figures and lower RAM usage
-    matplotlib.use("Agg")
 
     origin_wells = create_32_well_plate_layout()
 
