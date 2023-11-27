@@ -761,25 +761,24 @@ def get_plates_by_division(current_division, unique_file_names, is_ND_plate, is_
     control_plate_24hr_ND = None
     control_plate_48hr_ND = None
 
-    # There is an ND plate but all divisions are inactive, therefore we can get the plates by time and ND without specifying the division.
-    # Overall, we get 2 ND plates and 2 experiment plates
-    if is_ND_plate and is_all_divisions_inactive:
+    # All divisions are inactive, therefore we can get the plates by time and ND without specifying the division.
+    if is_all_divisions_inactive:
         experiment_plate_24hr = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', False)
         experiment_plate_48hr = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', False)
-        control_plate_24hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', True)
-        control_plate_48hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', True)
-    # There is an ND plate and there is an active division, therefore we need to specify the division
-    # Overall, we get 2 ND plates and 2 experiment plates
-    elif is_ND_plate and not is_all_divisions_inactive:
-        control_plate_24hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', True, current_division)
-        control_plate_48hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', True, current_division)
+        # Add the two ND plates if applicable
+        if is_ND_plate:
+            control_plate_24hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', True)
+            control_plate_48hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', True)
+    
+    # There is an active division, therefore we need to specify the division
+    else:
         experiment_plate_24hr = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', False, current_division)
         experiment_plate_48hr = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', False, current_division)
-    # There is no ND plate and there is an active division, therefore we need to specify the division
-    # Since there is no ND plate, we only get the 2 experiment plates. The control plates will be None in this case and the code down the line will handle that
-    elif not is_ND_plate and not is_all_divisions_inactive:
-        experiment_plate_24hr = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', False, current_division)
-        experiment_plate_48hr = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', False, current_division)
+        # Add the two ND plates if applicable
+        if is_ND_plate:
+            control_plate_24hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '24hr', True, current_division)
+            control_plate_48hr_ND = get_plate_name_by_time_ND_and_division(unique_file_names, '48hr', True, current_division)
+    
     
     return {'24hr': experiment_plate_24hr, '24hr_ND': control_plate_24hr_ND,
             '48hr': experiment_plate_48hr, '48hr_ND': control_plate_48hr_ND}
@@ -799,8 +798,7 @@ def get_plate_name_by_time_ND_and_division(file_names ,time, is_ND, current_divi
                                                      ('ND' not in file_name) and
                                                      (current_division in file_name)]
     if not len(files) == 1:
-        raise ValueError(f'Found {len(files)} files for time {time}, ND: {is_ND} and division {current_division}.
-                        Expected 1 file, please check that all files in the input directory are in the correct format as specified in the documentation')
+        raise ValueError(f'Found {len(files)} files for time {time}, ND: {is_ND} and division {current_division}. Expected 1 file, please check that all files in the input directory are in the correct format as specified in the documentation')
     return files[0]
         
 
