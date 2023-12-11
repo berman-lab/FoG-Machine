@@ -21,6 +21,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--path', help='The path to the pictures directory', required=True)
     parser.add_argument('-bn', '--base_name', help='A prefix to add to the name of the output files', required=True)
+    parser.add_argument('-sl', '--strip_layout', help='The layout of drug strips on the experiment plate either "|||" or "+"', required=True)
     parser.add_argument('-f', '--format', help='The layout of colonies of the plate (384, 1536)', required=True)
     parser.add_argument('-nd', '--is_ND', help='is there an ND plate included in the experiment', default=False ,action='store_true')
 
@@ -32,6 +33,7 @@ def main():
     args = parser.parse_args()
     input_path = os.path.normcase(args.path)
     base_name = args.base_name
+    strip_layout = args.strip_layout
     plate_format = int(args.format)
     is_ND_plate = args.is_ND
 
@@ -74,10 +76,10 @@ def main():
     output_dir_processed_data = create_directory(input_path, f'{base_name}_processed_data')
     output_dir_graphs = create_directory(input_path, f'{base_name}_graphs')
 
-    save_run_parameters(QC_dir, input_path, base_name, media, temprature, drug_name, plate_format)
+    save_run_parameters(input_path, base_name, strip_layout, plate_format, is_ND_plate, media, temprature, drug_name, QC_dir)
 
 
-    # Get the images from the input directory 
+    # Get the images from the input directory
     input_images = get_files_from_directory(input_path , '.png')
     
     # Check which divisions have files present in the input directory
@@ -107,12 +109,12 @@ def main():
         calculated_intesities[image_name] = current_image_intensities[image_name]
 
 
-    raw_spots_df = organize_raw_data(calculated_areas, calculated_intesities, plate_format)
+    raw_spots_df = organize_raw_data(calculated_areas, calculated_intesities, strip_layout ,plate_format)
     raw_spots_df.to_csv(os.path.join(output_dir_processed_data, f'{base_name}_raw_data.csv'), index=False)
 
 
     # Calculate the DI (Distance of Inhibition) for each strain
-    DI_df = create_DI_df(raw_spots_df, plate_format, DI_cutoffs, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate)
+    DI_df = create_DI_df(raw_spots_df, strip_layout, plate_format, DI_cutoffs, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate)
 
     FoG_df = create_FoG_df(raw_spots_df, DI_df, plate_format, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate)
 
@@ -173,14 +175,16 @@ def create_directory(parent_directory, nested_directory_name):
     return new_dir_path
 
 
-def save_run_parameters(output_dir_processed_data, input_path, prefix_name, media, temprature, drug_name, plate_format):
-    with open(os.path.join(output_dir_processed_data, f'{prefix_name}_run_parameters.txt'), 'w') as f:
-        f.write(f'path: {input_path}\n')
-        f.write(f'prefix_name: {prefix_name}\n')
+def save_run_parameters(input_path, base_name, strip_layout, plate_format, is_ND_plate, media, temprature, drug_name, output_dir_qc):
+    with open(os.path.join(output_dir_qc, f'{base_name}_run_parameters.txt'), 'w') as f:
+        f.write(f'input_path: {input_path}\n')
+        f.write(f'base_name: {base_name}\n')
+        f.write(f'strip_layout: {strip_layout}\n')
+        f.write(f'plate_format: {plate_format}\n')
+        f.write(f'is_ND_plate: {is_ND_plate}\n')
         f.write(f'media: {media}\n')
         f.write(f'temprature: {temprature}\n')
         f.write(f'drug_name: {drug_name}\n')
-        f.write(f'plate_format: {plate_format}\n')
 
 
 def check_active_divisions(input_images, text_division_of_origin_96_well_plate):
@@ -353,9 +357,10 @@ def get_growth_areas_coordinates(plate_format):
     The areas are ordered from top to bottom then left to right
     and therefore correspond to the order of growth areas in the plate
     '''
-    areas = np.empty((32, 40), dtype=object)
-
+    
     if plate_format == 1536:
+        areas = np.empty((32, 48), dtype=object)
+
         # A 1536 well plate has 32 rows and 48 columns and therefore generate 1536 areas
         # first itarate over the rows
         for row_index in range(32):
@@ -368,11 +373,9 @@ def get_growth_areas_coordinates(plate_format):
             # then iterate over the columns producing the areas in the order of 
             # left to right and top to bottom as required
             for column_index in range(48):
-
-                # Skip the columns in which the strip is located as there are no cells there
-                if column_index in [0, 1, 22, 23, 24, 25, 46, 47]:
-                    continue
-
+                # This code used to skip the columns in which the strip is located but for future use we will keep it and each function down the
+                # line will have to deal with the strip columns. This is done since in other configurations the strip will not cover cells and therefore
+                # we will want to include them in the calculations
                 curr_area_start_x = start_x + round(column_index * step_x)
                 curr_area_end_x = (start_x + round((column_index + 1) * step_x))
 
@@ -485,7 +488,36 @@ def calculate_intesity_in_areas(trimmed_image_name ,trimmed_image, segmented_ima
     return {trimmed_image_name : spot_intesities}
 
 
-def organize_raw_data(calculated_areas, calculated_intesities, plate_format):
+def is_skip_column(column_index, strip_layout, plate_format):
+    '''
+    Description
+    -----------
+    Check if the column should be skipped due to the strip being in it
+
+    Parameters
+    ----------
+    column_index : int
+        The index of the column to check
+    strip_layout : str
+        The layout of drug strips on the experiment plate either "|||" or "+"
+    plate_format : int
+        how many growth areas are in the image (96, 384, 1536)
+    
+    Returns
+    -------
+    bool
+        True if the column should be skipped, False otherwise
+    '''
+    if plate_format == 1536:
+        if strip_layout == '|||':
+            return column_index in  [0, 1, 22, 23, 24, 25, 46, 47]
+        else:
+            raise ValueError(f'Strip layout {strip_layout} is not supported')
+    else:
+        raise ValueError(f'Format {plate_format} is not supported')
+
+
+def organize_raw_data(calculated_areas, calculated_intesities, strip_layout, plate_format):
     '''
     Description
     -----------
@@ -504,6 +536,8 @@ def organize_raw_data(calculated_areas, calculated_intesities, plate_format):
         A dictionary with the image names as keys and the calculated areas as values under the row and column indexes as keys
     calculated_intesities : dict
         A dictionary with the image names as keys and the calculated average intesities as values under the row and column indexes as keys
+    strip_layout : str
+        The layout of drug strips on the experiment plate either "|||" or "+"
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
         
@@ -523,7 +557,7 @@ def organize_raw_data(calculated_areas, calculated_intesities, plate_format):
 
     for image_name in calculated_areas:
         for (row_index, column_index), area in calculated_areas[image_name].items():
-            curr_distance_from_strip = get_distance_from_strip(column_index, plate_format)
+            curr_distance_from_strip = get_distance_from_strip(column_index, strip_layout ,plate_format)
             
             distances_from_strip.append(curr_distance_from_strip)
             areas.append(area)
@@ -537,7 +571,7 @@ def organize_raw_data(calculated_areas, calculated_intesities, plate_format):
                          "distance_from_strip": distances_from_strip, "area": areas, "total_intensity": total_intensities})
 
 
-def get_distance_from_strip(column_index, plate_format):
+def get_distance_from_strip(column_index, strip_layout, plate_format):
     '''
     Description
     -----------
@@ -547,44 +581,50 @@ def get_distance_from_strip(column_index, plate_format):
     ----------
     column_index : int
         The column index of the growth area
+    strip_layout : str
+        The layout of drug strips on the experiment plate either "|||" or "+"
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
     
     Returns
     -------
     int
-        The distance of the growth area from the strip
+        The distance of the growth area from the strip (1 based counting)
     '''
+    
     if plate_format == 1536:
-        # 0 to 9 (physicaly 2 to 11) are the colonies that are near the leftmost strip and they are going away from it,
-        # therefore the distance from the strip is the same as the column_index + 1
-        # 0 needs to mapped to 1 and 9 to 10
-        if column_index in range(0, 10):
-            return column_index + 1
-        # 9 to 19 (physicaly 12 to 21) are the colonies that are to the left of the middle strip and they are going away from it,
-        # therefore the distance from the strip is the max index (19) minus the column_index
-        # 10 needs to be mapped to 10 and 19 to 1
-        elif column_index in range(10, 20):
-            return 20 - column_index
-        
-        # In the middle we skip 4 columns that are the strip but this previous steps have already excluded them,
-        # therefore the index continues from 20. This is a logical index and will be referred to as such going forward.
-        # There are 0 to 39 logical indexes, making the amount of columns 40.
-        # The actual count of colonies (whether they are used or not) will be referred to as the physical index, 0 to 47 in this case.
-        # Making the amount of physical columns 48.
+        if strip_layout == '|||':
 
-        # 20 to 30 (physicaly 26 to 35) are the colonies that are to the right of the middle strip and they are going away from it,
-        # therefore the distance from the strip is the column_index minus the min index -1 (to make it 1 based)
-        # 20 needs to mapped to 1 and 30 to 10
-        elif column_index in range(20, 30):
-            return column_index - 19
-        # 30 to 40 are the colonies that are left of the rightmost strip and they are going away from it,
-        # therefore the distance from the strip is the max index 40 minus the column_index
-        # 30 needs to mapped to 1 and 40 to 10
-        elif column_index in range(30, 40):
-            return 40 - column_index
+            # Mark all the columns that are the strip as -1
+            if is_skip_column(column_index, strip_layout, plate_format):
+                return -1
+
+            # Spots 2 to 11 are the colonies that are near the leftmost strip and they are going away from it,
+            # therefore the distance from the strip is the same as the column_index -1 (to make it 1 based)
+            # 2 needs to mapped to 1 and 11 to 10
+            if column_index in range(2, 12):
+                return column_index -1
+            # Spots 12 to 21 are the colonies that are to the left of the middle strip and they are going away from it,
+            # therefore the distance from the strip is the max index 22 minus the column_index
+            # 12 needs to be mapped to 10 and 21 to 1
+            elif column_index in range(12, 22):
+                return 22 - column_index
+            
+            # In the middle we skip 4 columns that are the strip but this previous steps have already excluded them,
+            # Spots 26 to 35 are the colonies that are to the right of the middle strip and they are going away from it,
+            # therefore the distance from the strip is the column_index minus the min index -1 (to make it 1 based)
+            # 26 needs to mapped to 1 and 35 to 10
+            elif column_index in range(26, 36):
+                return column_index - 25
+            # Spots 36 to 45 are the colonies that are left of the rightmost strip and they are going away from it,
+            # therefore the distance from the strip is the max index (46) minus the column_index
+            # 36 needs to mapped to 10 and 45 to 1
+            elif column_index in range(36, 46):
+                return 46 - column_index
+            else:
+                raise ValueError(f'Column index {column_index} is not a column in a 1536 well plate, this format has 40 columns within the context of this program')
         else:
-            raise ValueError(f'Column index {column_index} is not a column in a 1536 well plate, this format has 40 columns within the context of this program')
+            raise ValueError(f'Strip layout {strip_layout} is not supported')
     else:
         raise ValueError(f'Format {plate_format} is not supported')
 
@@ -648,7 +688,7 @@ def calculate_DI(areas_df,control_plate_24hr_ND_name, experiment_plate_24hr_name
     return DIs_from_strip
 
 
-def create_DI_df(areas_df, plate_format, DI_cutoffs, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate):
+def create_DI_df(areas_df, strip_layout, plate_format, DI_cutoffs, text_division_of_origin_96_well_plate, active_divisions, is_ND_plate):
     '''
     Description
     -----------
@@ -658,6 +698,8 @@ def create_DI_df(areas_df, plate_format, DI_cutoffs, text_division_of_origin_96_
     ----------
     areas_df : pandas dataframe
         The dataframe containing the areas of the growth areas
+    strip_layout : str
+        The layout of drug strips on the experiment plate either "|||" or "+"
     plate_format : int
         how many growth areas are in the image (96, 384, 1536)
     DI_cutoffs : list float
@@ -863,13 +905,13 @@ def convert_original_index_to_experiment_wells_indexes(origin_row_index, origin_
         # Based on the column index of the original plate map to the column index of the experiment plate
         # Since everythin is indexed on base 0 the column indexes are reduced by 1
         if origin_column_index == 0:
-            column_indexes = list(range(0,10))
+            column_indexes = list(range(2, 12))
         elif origin_column_index == 1:
-            column_indexes = list(range(10,20))
+            column_indexes = list(range(12, 22))
         elif origin_column_index == 2:
-            column_indexes = list(range(20,30))
+            column_indexes = list(range(26, 36))
         elif origin_column_index == 3:
-            column_indexes = list(range(30,40))
+            column_indexes = list(range(36, 46))
         else:
             raise ValueError(f'Column index {origin_column_index} is not an index in the experiment plate')
 

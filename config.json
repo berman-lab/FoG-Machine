@@ -1,13 +1,13 @@
 {
     "picture_trim_info_1536": {
-        "start_row": 664,
-        "end_row": 2420,
-        "start_col": 720,
-        "end_col": 3400
+        "start_row": 675,
+        "end_row": 2445,
+        "start_col": 700,
+        "end_col": 3470
     },
     "colony_spacing_and_locations_1536": {
-        "start_x": 41,
-        "start_y": 10,
+        "start_x": 85,
+        "start_y": 15,
         "step_x": 54,
         "step_y": 54
     },
